@@ -1,4 +1,4 @@
-const { useState, useEffect, useMemo } = React;
+const { useState, useEffect, useMemo, useRef } = React;
 
     // ========== PWA SETUP ==========
     // Create and inject manifest
@@ -2414,90 +2414,100 @@ const motivationalQuotes = [
       const [activeTab, setActiveTab] = useState('workout');
       const [showLogger, setShowLogger] = useState(true);
       const [showPlateCalc, setShowPlateCalc] = useState(false);
-
-      // Quick Log Mode: reduces taps without sacrificing strength tracking.
-      // Uses anchored (sticky) weight + reps, and one-tap set logging.
-      const [quickLogEnabled, setQuickLogEnabled] = useState(false);
       const [anchorWeight, setAnchorWeight] = useState('');
       const [anchorReps, setAnchorReps] = useState('');
+      const [anchorAdjusted, setAnchorAdjusted] = useState(false);
+      const [showAdjust, setShowAdjust] = useState(false);
       const [restDefaultSec, setRestDefaultSec] = useState(90);
       const [restRemainingSec, setRestRemainingSec] = useState(0);
       const [restRunning, setRestRunning] = useState(false);
-
-      const [sets, setSets] = useState([
-        { weight: '', reps: '', difficulty: '', showDifficulty: false },
-        { weight: '', reps: '', difficulty: '', showDifficulty: false },
-        { weight: '', reps: '', difficulty: '', showDifficulty: false },
-        { weight: '', reps: '', difficulty: '', showDifficulty: false }
-      ]);
+      const [loggedSets, setLoggedSets] = useState([]);
+      const [baselineInputs, setBaselineInputs] = useState({ weight: '', reps: '' });
+      const [baselineConfirmed, setBaselineConfirmed] = useState(sessions.length > 0);
+      const [note, setNote] = useState('');
+      const savedRef = useRef(false);
 
       const best = useMemo(() => getBestForEquipment(sessions), [sessions]);
       const strongWeight = useMemo(() => getStrongWeightForEquipment(profile, id), [profile, id]);
       const nextTarget = useMemo(() => getNextTarget(profile, id, best), [profile, id, best]);
+      const sessionNumber = sessions.length + 1;
 
-      const expIdx = EXPERIENCE_LEVELS.findIndex(e => e.label === profile.experience);
-      const activityMultiplier = ACTIVITY_LEVELS.find(a => a.label === profile.activityLevel)?.multiplier || 1.0;
-
-      const goalWeightRaw = (profile.weight || 0) * (eq.multipliers?.[profile.gender]?.[expIdx] || 0) * (eq.ratio || 1) * activityMultiplier;
-      const goal = clampTo5(eq.stackCap ? Math.min(goalWeightRaw, eq.stackCap) : goalWeightRaw);
-
-      const r5 = (n) => Math.max(10, Math.round(n / 5) * 5);
-
-      const goalBias = (GOALS.find(g => g.id === profile.goal)?.bias?.reps) || 'middle';
-      const repBase = goalBias === 'higher' ? 12 : goalBias === 'lower' ? 8 : 10;
-
-      const recommendedSets = [
-        { weight: r5(goal * 0.5), reps: repBase + 5 },
-        { weight: r5(goal * 0.85), reps: repBase + 2 },
-        { weight: goal, reps: repBase },
-        { weight: r5(goal * 1.05), reps: Math.max(6, repBase - 1) }
-      ];
-
-      const handleUseRecommended = () => {
-        setSets(recommendedSets.map(s => ({
-          weight: String(s.weight),
-          reps: String(s.reps),
-          difficulty: '',
-          showDifficulty: false
-        })));
+      const deriveSessionAnchor = (session) => {
+        if (!session) return { weight: null, reps: null };
+        const weights = (session.sets || []).map(s => s.weight || 0).filter(Boolean);
+        const reps = (session.sets || []).map(s => s.reps || 0).filter(Boolean);
+        return {
+          weight: session.anchorWeight || (weights.length ? Math.max(...weights) : null),
+          reps: session.anchorReps || (reps.length ? Math.round(reps.reduce((a, b) => a + b, 0) / reps.length) : null)
+        };
       };
 
-      useEffect(() => {
-        handleUseRecommended();
-      }, [id]);
+      const baselineFromHistory = useMemo(() => {
+        if (!sessions || sessions.length === 0) return null;
+        const first = sessions[0];
+        const anchor = deriveSessionAnchor(first);
+        if (first?.baselineWeight && first?.baselineReps) {
+          return { weight: first.baselineWeight, reps: first.baselineReps };
+        }
+        if (anchor.weight && anchor.reps) return { weight: anchor.weight, reps: anchor.reps };
+        return null;
+      }, [sessions]);
 
-      // --- Last session micro-context (for confidence, not guilt) ---
+      const recentAnchor = useMemo(() => {
+        const recent = (sessions || []).slice(-3);
+        if (recent.length === 0) return { weight: null, reps: null };
+        const weights = recent.map(s => deriveSessionAnchor(s).weight).filter(Boolean);
+        const reps = recent.map(s => deriveSessionAnchor(s).reps).filter(Boolean);
+        return {
+          weight: weights.length ? Math.max(...weights) : null,
+          reps: reps.length ? Math.round(reps.sort((a,b) => a-b)[Math.floor(reps.length/2)]) : null
+        };
+      }, [sessions]);
+
       const lastSessionInfo = useMemo(() => {
         if (!sessions || sessions.length === 0) return null;
         const sorted = [...sessions].sort((a, b) => new Date(b.date) - new Date(a.date));
         const last = sorted[0];
+        const anchor = deriveSessionAnchor(last);
         const lastSets = last?.sets || [];
         if (lastSets.length === 0) return null;
         const maxW = Math.max(...lastSets.map(s => s.weight || 0));
         const avgR = Math.round(lastSets.reduce((sum, s) => sum + (s.reps || 0), 0) / lastSets.length);
         return {
           date: last.date,
-          weight: maxW,
-          reps: avgR,
+          weight: anchor.weight || maxW,
+          reps: anchor.reps || avgR,
           setCount: lastSets.length
         };
       }, [sessions]);
 
-      // Initialize anchored values for Quick Log when exercise changes.
+      const lastSession = sessions[sessions.length - 1];
+      const defaultAnchor = useMemo(() => {
+        const anchor = deriveSessionAnchor(lastSession);
+        if (anchor.weight && anchor.reps) return anchor;
+        if (baselineFromHistory) return baselineFromHistory;
+        return { weight: null, reps: null };
+      }, [lastSession, baselineFromHistory]);
+
       useEffect(() => {
-        // Prefer last session; otherwise use recommended third set.
-        if (lastSessionInfo) {
-          setAnchorWeight(String(lastSessionInfo.weight || ''));
-          setAnchorReps(String(lastSessionInfo.reps || ''));
-        } else {
-          const fallback = recommendedSets?.[2] || recommendedSets?.[1] || recommendedSets?.[0];
-          setAnchorWeight(fallback ? String(fallback.weight) : '');
-          setAnchorReps(fallback ? String(fallback.reps) : '');
-        }
+        const weight = defaultAnchor.weight ? String(defaultAnchor.weight) : '';
+        const reps = defaultAnchor.reps ? String(defaultAnchor.reps) : '';
+        setAnchorWeight(weight);
+        setAnchorReps(reps);
+        setAnchorAdjusted(false);
+        setShowAdjust(false);
+        setLoggedSets([]);
+        setNote('');
+        setBaselineInputs({
+          weight: baselineFromHistory?.weight ? String(baselineFromHistory.weight) : '',
+          reps: baselineFromHistory?.reps ? String(baselineFromHistory.reps) : ''
+        });
+        setBaselineConfirmed(sessions.length > 0);
+        savedRef.current = false;
         // Reset rest timer when switching exercises.
         setRestRunning(false);
         setRestRemainingSec(0);
-      }, [id]);
+      }, [id, defaultAnchor, baselineFromHistory, sessions.length]);
 
       // Rest timer tick
       useEffect(() => {
@@ -2532,35 +2542,121 @@ const motivationalQuotes = [
         const w = Number(anchorWeight);
         const r = Number(anchorReps);
         if (!w || !r || w <= 0 || r <= 0) return;
-        const next = [...sets];
-        const idx = next.findIndex(s => !s.weight && !s.reps);
-        const targetIdx = idx >= 0 ? idx : next.length;
-        if (targetIdx === next.length) {
-          next.push({ weight: '', reps: '', difficulty: '', showDifficulty: false });
-        }
-        next[targetIdx] = {
-          ...next[targetIdx],
-          weight: String(w),
-          reps: String(r),
-          difficulty: next[targetIdx].difficulty || '',
-          showDifficulty: false
-        };
-        setSets(next);
+        setLoggedSets(prev => [...prev, { weight: w, reps: r }]);
         startRest();
       };
 
-      const handleSaveSession = () => {
-        const validSets = sets
-          .filter(s => s.weight && s.reps && Number(s.weight) > 0 && Number(s.reps) > 0)
-          .map(s => ({
-            weight: Number(s.weight),
-            reps: Number(s.reps),
-            difficulty: s.difficulty || undefined
-          }));
-
-        if (validSets.length > 0) {
-          onSave(id, { date: new Date().toISOString(), sets: validSets });
+      const buildSessionPayload = () => {
+        if (loggedSets.length === 0) return null;
+        const basePayload = {
+          date: new Date().toISOString(),
+          sets: loggedSets,
+          anchorWeight: Number(anchorWeight),
+          anchorReps: Number(anchorReps),
+          adjustedToday: anchorAdjusted || false,
+          note: note || undefined
+        };
+        if (sessions.length === 0) {
+          return {
+            ...basePayload,
+            baselineWeight: Number(anchorWeight),
+            baselineReps: Number(anchorReps)
+          };
         }
+        return basePayload;
+      };
+
+      const handleSaveSession = () => {
+        const payload = buildSessionPayload();
+        if (payload) {
+          onSave(id, payload);
+          savedRef.current = true;
+          return true;
+        }
+        return false;
+      };
+
+      useEffect(() => {
+        return () => {
+          if (!savedRef.current) {
+            handleSaveSession();
+          }
+        };
+      }, [id, loggedSets, anchorWeight, anchorReps, anchorAdjusted, note]);
+
+      const handleClose = () => {
+        const saved = handleSaveSession();
+        onClose();
+        if (saved) alert('Workout logged.');
+      };
+
+      const isBaselineMode = sessions.length === 0 && !baselineConfirmed;
+
+      const weightBump = (w) => {
+        if (!w) return 5;
+        if (w < 50) return 2.5;
+        if (w < 120) return 5;
+        return 10;
+      };
+
+      const suggestedSets = useMemo(() => {
+        const numericAnchorWeight = Number(anchorWeight) || Number(baselineInputs.weight);
+        const numericAnchorReps = Number(anchorReps) || Number(baselineInputs.reps);
+
+        if (isBaselineMode) return [];
+
+        if (sessions.length === 0) {
+          if (!numericAnchorWeight || !numericAnchorReps) return [];
+          return [
+            { label: 'Set 1', weight: numericAnchorWeight, reps: numericAnchorReps, note: 'Baseline' },
+            { label: 'Set 2', weight: numericAnchorWeight, reps: numericAnchorReps },
+            { label: 'Set 3', weight: numericAnchorWeight, reps: `${numericAnchorReps}+`, note: 'Optional AMRAP' }
+          ];
+        }
+
+        if (sessions.length === 1) {
+          const lastSets = lastSession?.sets || [];
+          if (lastSets.length > 0) {
+            return lastSets.map((s, idx) => ({
+              label: `Set ${idx + 1}`,
+              weight: s.weight,
+              reps: s.reps,
+              note: idx === lastSets.length - 1 ? 'Match last session' : undefined
+            }));
+          }
+          if (!numericAnchorWeight || !numericAnchorReps) return [];
+          return [
+            { label: 'Set 1', weight: numericAnchorWeight, reps: numericAnchorReps },
+            { label: 'Set 2', weight: numericAnchorWeight, reps: numericAnchorReps },
+            { label: 'Set 3', weight: numericAnchorWeight, reps: `${numericAnchorReps}+`, note: 'Optional AMRAP' }
+          ];
+        }
+
+        const baseWeight = recentAnchor.weight || numericAnchorWeight;
+        const baseReps = recentAnchor.reps || numericAnchorReps;
+        if (!baseWeight || !baseReps) return [];
+
+        const bump = weightBump(baseWeight);
+
+        return [
+          { label: 'Set 1', weight: baseWeight, reps: baseReps + 1, note: 'Same weight, +1 rep' },
+          { label: 'Set 2', weight: baseWeight + bump, reps: baseReps, note: 'Small weight bump' },
+          { label: 'Set 3', weight: baseWeight, reps: `${baseReps}+`, note: 'Optional AMRAP finisher' }
+        ];
+      }, [sessions.length, anchorWeight, anchorReps, baselineInputs, isBaselineMode, lastSession, recentAnchor]);
+
+      const currentSuggestionIndex = suggestedSets.length > 0
+        ? Math.min(loggedSets.length, suggestedSets.length - 1)
+        : 0;
+
+      const handleConfirmBaseline = () => {
+        const w = Number(baselineInputs.weight);
+        const r = Number(baselineInputs.reps);
+        if (!w || !r || w <= 0 || r <= 0) return;
+        setAnchorWeight(String(w));
+        setAnchorReps(String(r));
+        setBaselineConfirmed(true);
+        setAnchorAdjusted(false);
       };
 
       const percentToStrong = best ? Math.min(100, Math.round((best / strongWeight) * 100)) : 0;
@@ -2575,7 +2671,7 @@ const motivationalQuotes = [
           <div className="bg-white w-full max-w-md rounded-t-3xl shadow-2xl flex flex-col animate-slide-up" style={{maxHeight: '90vh'}}>
             <div className="p-4 border-b border-gray-100 flex justify-between items-center bg-white rounded-t-3xl flex-shrink-0">
               <div className="flex items-center gap-3">
-                <button onClick={onClose} className="text-gray-500 hover:text-gray-700 transition-colors">
+                <button onClick={handleClose} className="text-gray-500 hover:text-gray-700 transition-colors">
                   <Icon name="ChevronLeft" className="w-6 h-6"/>
                 </button>
                 <div>
@@ -2585,7 +2681,7 @@ const motivationalQuotes = [
                   </p>
                 </div>
               </div>
-              <button onClick={onClose} className="p-2 bg-gray-50 rounded-full text-gray-400 hover:text-gray-600 transition-colors">
+              <button onClick={handleClose} className="p-2 bg-gray-50 rounded-full text-gray-400 hover:text-gray-600 transition-colors">
                 <Icon name="X" className="w-5 h-5"/>
               </button>
             </div>
@@ -2662,16 +2758,47 @@ const motivationalQuotes = [
 
                       {showLogger && (
                         <div className="px-4 pb-4 space-y-3 animate-expand">
-                          {profile.weight > 0 && (
-                            <button
-                              onClick={handleUseRecommended}
-                              className="w-full py-2 px-3 rounded-lg text-xs font-bold bg-purple-50 text-purple-700 border border-purple-200 active:scale-95 transition-all"
-                            >
-                              Use Recommended Sets
-                            </button>
+                          {isBaselineMode && (
+                            <div className="p-3 rounded-2xl bg-purple-50 border border-purple-200 space-y-3">
+                              <div className="flex items-start gap-3">
+                                <div className="text-2xl">🧭</div>
+                                <div className="flex-1">
+                                  <div className="text-[10px] font-black uppercase text-purple-700">Baseline setup</div>
+                                  <p className="text-sm text-purple-900 font-semibold leading-relaxed">
+                                    This is just a starting point. You can change this anytime.
+                                  </p>
+                                </div>
+                              </div>
+                              <div className="grid grid-cols-2 gap-2">
+                                <input
+                                  type="number"
+                                  inputMode="numeric"
+                                  value={baselineInputs.weight}
+                                  onChange={(e) => setBaselineInputs(prev => ({ ...prev, weight: e.target.value }))}
+                                  placeholder="lbs"
+                                  className="w-full p-3 rounded-xl border-2 border-purple-200 bg-white font-black text-center text-gray-900 focus:border-purple-500 outline-none"
+                                />
+                                <input
+                                  type="number"
+                                  inputMode="numeric"
+                                  value={baselineInputs.reps}
+                                  onChange={(e) => setBaselineInputs(prev => ({ ...prev, reps: e.target.value }))}
+                                  placeholder="reps"
+                                  className="w-full p-3 rounded-xl border-2 border-purple-200 bg-white font-black text-center text-gray-900 focus:border-purple-500 outline-none"
+                                />
+                              </div>
+                              <button
+                                onClick={handleConfirmBaseline}
+                                disabled={!baselineInputs.weight || !baselineInputs.reps}
+                                className={`w-full py-3 rounded-xl font-black text-white transition-all active:scale-95 ${
+                                  baselineInputs.weight && baselineInputs.reps ? 'bg-purple-600 shadow-lg' : 'bg-purple-200 cursor-not-allowed'
+                                }`}
+                              >
+                                Set baseline & start logging
+                              </button>
+                            </div>
                           )}
 
-                          {/* Last session micro-context */}
                           {lastSessionInfo && (
                             <div className="px-3 py-2 rounded-xl bg-gray-50 border border-gray-100">
                               <div className="text-[10px] font-bold text-gray-400 uppercase">Last session</div>
@@ -2681,200 +2808,179 @@ const motivationalQuotes = [
                             </div>
                           )}
 
-                          {/* Quick Log Toggle */}
-                          <button
-                            onClick={() => setQuickLogEnabled(v => !v)}
-                            className={`w-full px-3 py-2 rounded-xl border flex items-center justify-between transition-all active:scale-[0.99] ${
-                              quickLogEnabled ? 'bg-purple-50 border-purple-200' : 'bg-white border-gray-200'
-                            }`}
-                          >
-                            <div className="text-left">
-                              <div className={`text-xs font-black uppercase ${quickLogEnabled ? 'text-purple-700' : 'text-gray-700'}`}>Quick Log</div>
-                              <div className="text-[11px] text-gray-500">One tap logs a set using your last weight.</div>
-                            </div>
-                            <div className={`w-11 h-6 rounded-full p-1 transition-all ${quickLogEnabled ? 'bg-purple-600' : 'bg-gray-300'}`}>
-                              <div className={`w-4 h-4 bg-white rounded-full transition-all ${quickLogEnabled ? 'translate-x-5' : 'translate-x-0'}`}></div>
-                            </div>
-                          </button>
-
-                          {/* Quick Log Panel */}
-                          {quickLogEnabled && (
-                            <div className="p-3 rounded-2xl bg-purple-50 border border-purple-200">
-                              <div className="flex items-center justify-between mb-2">
-                                <div className="text-xs font-black uppercase text-purple-700">Anchored set</div>
-                                <div className="text-[10px] text-purple-600 font-semibold">Change weight anytime</div>
-                              </div>
-                              <div className="flex gap-3 mb-3">
-                                <div className="flex-1">
-                                  <input
-                                    type="number"
-                                    inputMode="numeric"
-                                    value={anchorWeight}
-                                    onChange={(e) => setAnchorWeight(e.target.value)}
-                                    className="w-full p-2 rounded-lg font-bold text-center bg-white border border-purple-200 focus:border-purple-400 focus:ring-1 focus:ring-purple-100 outline-none transition-all text-gray-700"
-                                    placeholder="lbs"
-                                  />
-                                </div>
-                                <div className="flex-1">
-                                  <input
-                                    type="number"
-                                    inputMode="numeric"
-                                    value={anchorReps}
-                                    onChange={(e) => setAnchorReps(e.target.value)}
-                                    className="w-full p-2 rounded-lg font-bold text-center bg-white border border-purple-200 focus:border-purple-400 focus:ring-1 focus:ring-purple-100 outline-none transition-all text-gray-700"
-                                    placeholder="reps"
-                                  />
-                                </div>
-                              </div>
-
-                              <button
-                                onClick={handleQuickAddSet}
-                                disabled={!anchorWeight || !anchorReps}
-                                className={`w-full py-3 rounded-xl font-black text-white transition-all active:scale-95 flex items-center justify-center gap-2 ${
-                                  anchorWeight && anchorReps ? 'bg-purple-600 shadow-lg' : 'bg-purple-200 cursor-not-allowed'
-                                }`}
-                              >
-                                <span className="text-lg">＋</span>
-                                Add Set
-                              </button>
-
-                              <div className="mt-3 flex items-center justify-between bg-white border border-purple-100 rounded-xl px-3 py-2">
+                          {!isBaselineMode && (
+                            <div className="p-3 rounded-2xl bg-gray-50 border border-gray-100 space-y-2">
+                              <div className="flex items-center justify-between">
                                 <div>
-                                  <div className="text-[10px] font-bold text-gray-400 uppercase">Rest</div>
-                                  <div className="text-sm font-black text-gray-900">
-                                    {restRunning ? formatRest(restRemainingSec) : formatRest(restDefaultSec)}
+                                  <div className="text-[10px] font-black uppercase text-gray-500">
+                                    {sessions.length >= 2 ? 'Progression Plan (Today)' : 'Suggested Sets'}
+                                  </div>
+                                  <div className="text-[11px] text-gray-500">
+                                    Show the plan, log reality. Suggestions stay soft.
                                   </div>
                                 </div>
-                                <div className="flex items-center gap-2">
-                                  <button
-                                    onClick={() => setRestDefaultSec(s => Math.max(15, (Number(s) || 90) - 15))}
-                                    className="px-3 py-2 rounded-lg bg-gray-50 border border-gray-100 text-gray-700 font-bold active:scale-95"
-                                    title="-15s"
-                                  >
-                                    −15
-                                  </button>
-                                  <button
-                                    onClick={() => setRestDefaultSec(s => Math.min(600, (Number(s) || 90) + 15))}
-                                    className="px-3 py-2 rounded-lg bg-gray-50 border border-gray-100 text-gray-700 font-bold active:scale-95"
-                                    title="+15s"
-                                  >
-                                    +15
-                                  </button>
-                                  <button
-                                    onClick={() => {
-                                      if (restRunning) setRestRunning(false);
-                                      else startRest();
-                                    }}
-                                    className={`px-3 py-2 rounded-lg border font-bold active:scale-95 ${restRunning ? 'bg-purple-50 border-purple-200 text-purple-700' : 'bg-white border-gray-200 text-gray-700'}`}
-                                  >
-                                    {restRunning ? 'Pause' : 'Start'}
-                                  </button>
+                                <div className="text-[10px] font-semibold text-purple-600">
+                                  {sessions.length < 2 ? 'No increases yet' : 'Info only'}
                                 </div>
                               </div>
-
-                              <div className="mt-2 text-[10px] text-purple-700/80 font-semibold">
-                                Tip: this keeps your strength trends accurate—just fewer taps.
-                              </div>
+                              {suggestedSets.length === 0 ? (
+                                <div className="text-sm text-gray-500">Set your anchor to see suggestions.</div>
+                              ) : (
+                                <div className="space-y-2">
+                                  {suggestedSets.map((s, idx) => (
+                                    <div
+                                      key={idx}
+                                      className={`p-2 rounded-xl border-2 ${idx === currentSuggestionIndex ? 'border-purple-300 bg-white shadow-sm' : 'border-transparent bg-white'}`}
+                                    >
+                                      <div className="flex items-center justify-between">
+                                        <div className="text-sm font-black text-gray-900">{s.label}</div>
+                                        {idx === currentSuggestionIndex && (
+                                          <div className="text-[10px] font-bold text-purple-600 uppercase">Up next</div>
+                                        )}
+                                      </div>
+                                      <div className="text-sm text-gray-800 font-semibold">{s.weight} lb × {s.reps} reps</div>
+                                      {s.note && <div className="text-[11px] text-gray-500">{s.note}</div>}
+                                    </div>
+                                  ))}
+                                </div>
+                              )}
                             </div>
                           )}
 
-                          {sets.map((set, i) => (
-                            <div key={i} className="bg-gray-50 rounded-xl p-3 border border-gray-100">
-                              <div className="text-xs font-bold text-gray-500 uppercase mb-2">Set {i + 1}</div>
-                              <div className="flex gap-3 mb-2">
-                                <div className="flex-1">
-                                  <input
-                                    type="number"
-                                    value={set.weight}
-                                    onChange={e => {
-                                      const next = [...sets];
-                                      next[i].weight = e.target.value;
-                                      setSets(next);
-                                    }}
-                                    className="w-full p-2 rounded-lg font-bold text-center bg-white border border-gray-200 focus:border-purple-400 focus:ring-1 focus:ring-purple-100 outline-none transition-all text-gray-700"
-                                    placeholder="lbs"
-                                  />
+                          <div className="p-3 rounded-2xl bg-purple-50 border border-purple-200 space-y-3">
+                            <div className="flex items-center justify-between">
+                              <div>
+                                <div className="text-[10px] font-black uppercase text-purple-700">Anchored weight</div>
+                                <div className="text-base font-black text-purple-900">
+                                  {anchorWeight && anchorReps ? `${anchorWeight} lb × ${anchorReps} reps` : 'Set your anchor'}
                                 </div>
-                                <div className="flex-1">
-                                  <input
-                                    type="number"
-                                    value={set.reps}
-                                    onChange={e => {
-                                      const next = [...sets];
-                                      next[i].reps = e.target.value;
-                                      setSets(next);
-                                    }}
-                                    className="w-full p-2 rounded-lg font-bold text-center bg-white border border-gray-200 focus:border-purple-400 focus:ring-1 focus:ring-purple-100 outline-none transition-all text-gray-700"
-                                    placeholder="reps"
-                                  />
-                                </div>
+                                {anchorAdjusted && <div className="text-[11px] text-purple-700 font-semibold">Adjusted today</div>}
                               </div>
+                              <button
+                                onClick={() => setShowAdjust(v => !v)}
+                                className="px-3 py-2 rounded-lg bg-white border border-purple-200 text-purple-700 font-bold active:scale-95 text-xs"
+                              >
+                                {showAdjust ? 'Done' : 'Adjust'}
+                              </button>
+                            </div>
 
-                              {eq.type === 'barbell' && set.weight && (
-                                <div className="mt-2 p-2 bg-blue-50 border border-blue-200 rounded-lg">
-                                  <div className="text-xs font-bold text-blue-700 mb-1">
-                                    {(() => {
-                                      const loading = getPlateLoadingForSet(set.weight);
-                                      return loading ? loading.display : 'Loading...';
-                                    })()}
-                                  </div>
-                                  <div className="text-xs text-blue-600">
-                                    Total: {(() => {
-                                      const loading = getPlateLoadingForSet(set.weight);
-                                      return loading ? `${loading.total} lbs` : '—';
-                                    })()}
-                                  </div>
-                                </div>
-                              )}
+                            {showAdjust && (
+                              <div className="grid grid-cols-2 gap-2">
+                                <input
+                                  type="number"
+                                  inputMode="numeric"
+                                  value={anchorWeight}
+                                  onChange={(e) => { setAnchorWeight(e.target.value); setAnchorAdjusted(true); }}
+                                  placeholder="lbs"
+                                  className="w-full p-3 rounded-xl border-2 border-purple-200 bg-white font-black text-center text-gray-900 focus:border-purple-500 outline-none"
+                                />
+                                <input
+                                  type="number"
+                                  inputMode="numeric"
+                                  value={anchorReps}
+                                  onChange={(e) => { setAnchorReps(e.target.value); setAnchorAdjusted(true); }}
+                                  placeholder="reps"
+                                  className="w-full p-3 rounded-xl border-2 border-purple-200 bg-white font-black text-center text-gray-900 focus:border-purple-500 outline-none"
+                                />
+                              </div>
+                            )}
 
-                              {set.weight && set.reps && (
-                                <>
-                                  <button
-                                    onClick={() => {
-                                      const next = [...sets];
-                                      next[i].showDifficulty = !next[i].showDifficulty;
-                                      setSets(next);
-                                    }}
-                                    className="w-full text-xs text-purple-600 font-semibold py-1 hover:bg-purple-50 rounded transition-colors"
-                                  >
-                                    {set.showDifficulty ? 'Hide' : 'How did it feel?'} {set.showDifficulty ? '▲' : '▼'}
-                                  </button>
-
-                                  {set.showDifficulty && (
-                                    <div className="grid grid-cols-2 gap-2 mt-2 animate-expand">
-                                      {DIFFICULTY_LEVELS.map(diff => (
-                                        <button
-                                          key={diff.value}
-                                          onClick={() => {
-                                            const next = [...sets];
-                                            next[i].difficulty = diff.value;
-                                            setSets(next);
-                                          }}
-                                          className={`p-2 rounded-lg text-xs font-semibold border-2 transition-all ${
-                                            set.difficulty === diff.value ? 'border-purple-400 bg-purple-50 text-purple-700' : 'border-gray-200 bg-white text-gray-600'
-                                          }`}
-                                        >
-                                          <div className="text-base mb-1">{diff.emoji}</div>
-                                          <div>{diff.label}</div>
-                                        </button>
-                                      ))}
-                                    </div>
-                                  )}
-                                </>
+                            <div className="flex items-center justify-between text-sm font-semibold text-purple-900">
+                              <span>Sets completed: {loggedSets.length}</span>
+                              {anchorWeight && anchorReps && (
+                                <span className="text-[11px] text-purple-700 font-bold">Using: {anchorWeight} lb × {anchorReps} reps</span>
                               )}
                             </div>
-                          ))}
 
-                          <button
-                            onClick={handleSaveSession}
-                            disabled={!sets.some(s => s.weight && s.reps)}
-                            className={`w-full py-3 rounded-xl font-bold text-white transition-all active:scale-95 flex items-center justify-center gap-2 ${
-                              sets.some(s => s.weight && s.reps) ? 'bg-purple-600 shadow-lg' : 'bg-gray-300 cursor-not-allowed'
-                            }`}
-                          >
-                            <Icon name="Check" className="w-5 h-5"/>
-                            Save Session
-                          </button>
+                            <button
+                              onClick={handleQuickAddSet}
+                              disabled={!anchorWeight || !anchorReps || isBaselineMode}
+                              className={`w-full py-3 rounded-xl font-black text-white transition-all active:scale-95 flex items-center justify-center gap-2 ${
+                                (!anchorWeight || !anchorReps || isBaselineMode) ? 'bg-purple-200 cursor-not-allowed' : 'bg-purple-600 shadow-lg'
+                              }`}
+                            >
+                              <span className="text-lg">＋</span>
+                              Add Set
+                            </button>
+
+                            <div className="flex items-center justify-between bg-white border border-purple-100 rounded-xl px-3 py-2">
+                              <div>
+                                <div className="text-[10px] font-bold text-gray-400 uppercase">Rest</div>
+                                <div className="text-sm font-black text-gray-900">
+                                  {restRunning ? formatRest(restRemainingSec) : formatRest(restDefaultSec)}
+                                </div>
+                              </div>
+                              <div className="flex items-center gap-2">
+                                <button
+                                  onClick={() => setRestDefaultSec(s => Math.max(15, (Number(s) || 90) - 15))}
+                                  className="px-3 py-2 rounded-lg bg-gray-50 border border-gray-100 text-gray-700 font-bold active:scale-95"
+                                  title="-15s"
+                                >
+                                  −15
+                                </button>
+                                <button
+                                  onClick={() => setRestDefaultSec(s => Math.min(600, (Number(s) || 90) + 15))}
+                                  className="px-3 py-2 rounded-lg bg-gray-50 border border-gray-100 text-gray-700 font-bold active:scale-95"
+                                  title="+15s"
+                                >
+                                  +15
+                                </button>
+                                <button
+                                  onClick={() => {
+                                    if (restRunning) setRestRunning(false);
+                                    else startRest();
+                                  }}
+                                  className={`px-3 py-2 rounded-lg border font-bold active:scale-95 ${restRunning ? 'bg-purple-50 border-purple-200 text-purple-700' : 'bg-white border-gray-200 text-gray-700'}`}
+                                >
+                                  {restRunning ? 'Pause' : 'Start'}
+                                </button>
+                              </div>
+                            </div>
+
+                            <div className="text-[10px] text-purple-700/80 font-semibold">
+                              One tap logs a set. Suggestions stay read-only.
+                            </div>
+                          </div>
+
+                          <div className="p-3 rounded-2xl bg-white border border-gray-100">
+                            <div className="text-[10px] font-black uppercase text-gray-500 mb-2">Logged sets</div>
+                            {loggedSets.length === 0 ? (
+                              <div className="text-sm text-gray-500">No sets logged yet.</div>
+                            ) : (
+                              <div className="grid grid-cols-3 gap-2">
+                                {loggedSets.map((s, idx) => (
+                                  <div key={idx} className="p-2 rounded-lg bg-gray-50 border border-gray-100 text-center">
+                                    <div className="text-xs font-black text-gray-900">Set {idx + 1}</div>
+                                    <div className="text-sm font-semibold text-gray-800">{s.weight} lb</div>
+                                    <div className="text-[11px] text-gray-500">× {s.reps} reps</div>
+                                  </div>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+
+                          <div className="p-3 rounded-2xl bg-white border border-gray-100 space-y-2">
+                            <div className="flex items-center justify-between">
+                              <div>
+                                <div className="text-[10px] font-black uppercase text-gray-500">Finish</div>
+                                <div className="text-[11px] text-gray-500">Auto-saves when you close.</div>
+                              </div>
+                              <button
+                                onClick={handleClose}
+                                className="px-4 py-2 rounded-lg bg-purple-600 text-white font-bold active:scale-95"
+                              >
+                                Workout logged
+                              </button>
+                            </div>
+                            <label className="text-[11px] text-gray-500 font-semibold">Add note (optional)</label>
+                            <textarea
+                              value={note}
+                              onChange={(e) => setNote(e.target.value)}
+                              placeholder="How did this feel?"
+                              className="w-full p-3 rounded-xl border border-gray-200 bg-gray-50 text-sm text-gray-800 focus:border-purple-400 outline-none"
+                              rows={2}
+                            />
+                          </div>
                         </div>
                       )}
                     </div>
@@ -3900,10 +4006,15 @@ const motivationalQuotes = [
       }, [profile.gymType, todayWorkoutType]);
 
       const handleSaveSession = (id, session) => {
-        setHistory(prev => ({
-          ...prev,
-          [id]: [...(prev[id] || []), session]
-        }));
+        const sessionDay = toDayKey(new Date(session.date));
+        setHistory(prev => {
+          const prevSessions = prev[id] || [];
+          const existingIdx = prevSessions.findIndex(s => toDayKey(new Date(s.date)) === sessionDay);
+          const updated = [...prevSessions];
+          if (existingIdx >= 0) updated[existingIdx] = session;
+          else updated.push(session);
+          return { ...prev, [id]: updated };
+        });
 
         setAppState(prev => ({
           ...prev,
