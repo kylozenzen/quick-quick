@@ -137,6 +137,21 @@ body.dark-mode button.bg-purple-600 {
               0 0 40px rgba(139, 92, 246, 0.2);
 }
 
+/* Cardio tiles in dark mode */
+body.dark-mode .cardio-card { 
+  background: #0f0f0f !important; 
+  border-color: rgba(139, 92, 246, 0.35) !important;
+  box-shadow: 0 0 16px rgba(139, 92, 246, 0.12);
+}
+body.dark-mode .cardio-card .cardio-accent { 
+  background: rgba(139, 92, 246, 0.18) !important; 
+  color: #c4b5fd !important;
+  border: 1px solid rgba(139, 92, 246, 0.35);
+}
+body.dark-mode .cardio-card .cardio-track { 
+  border-color: rgba(139, 92, 246, 0.3) !important;
+}
+
 /* Borders */
 .border { border-width: 1px; }
 .border-2 { border-width: 2px; }

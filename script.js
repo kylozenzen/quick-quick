@@ -1340,8 +1340,16 @@ const motivationalQuotes = [
     // ========== HOME SCREEN ==========
     const Home = ({ profile, setProfile, history, cardioHistory, appState, setAppState, onGoWorkout, onStartSuggestedWorkout, onGoProfile, onOpenCardio, streakObj, achievements, todayWorkoutType, settings, setSettings }) => {
       const [showAchievements, setShowAchievements] = useState(false);
-      const [workoutCollapsed, setWorkoutCollapsed] = useState(settings?.suggestedWorkoutCollapsed ?? true);
+      const [workoutCollapsed, setWorkoutCollapsed] = useState(true);
       const [selectedPresetId, setSelectedPresetId] = useState(null);
+
+      useEffect(() => {
+        if (typeof settings?.suggestedWorkoutCollapsed === 'boolean') {
+          setWorkoutCollapsed(settings.suggestedWorkoutCollapsed);
+        } else {
+          setSettings?.(prev => ({ ...(prev || {}), suggestedWorkoutCollapsed: true }));
+        }
+      }, [settings?.suggestedWorkoutCollapsed, setSettings]);
       
       const todayKey = toDayKey(new Date());
       const doneToday = useMemo(() => {
@@ -1799,7 +1807,7 @@ const motivationalQuotes = [
 
       return (
         <div className="fixed inset-0 bg-black/60 flex items-end justify-center z-[100]" onClick={onClose}>
-          <div className="bg-white rounded-t-3xl w-full max-w-lg animate-slide-up" style={{ maxHeight: '90vh' }} onClick={e => e.stopPropagation()}>
+          <div className="bg-white dark-mode-modal rounded-t-3xl w-full max-w-lg animate-slide-up" style={{ maxHeight: '90vh' }} onClick={e => e.stopPropagation()}>
             <div className="p-6 pb-8 overflow-y-auto" style={{ maxHeight: '90vh' }}>
               <div className="flex items-center justify-between mb-6">
                 <div className="flex items-center gap-3">
@@ -1842,7 +1850,7 @@ const motivationalQuotes = [
                       value={duration}
                       onChange={e => setDuration(e.target.value)}
                       placeholder="30"
-                      className="w-full p-4 border-2 border-gray-200 rounded-xl text-lg font-bold focus:border-purple-400 outline-none"
+                      className="w-full p-4 border-2 border-gray-200 rounded-xl text-lg font-bold focus:border-purple-400 outline-none dark-mode-input"
                     />
                   </div>
                   <div>
@@ -1874,12 +1882,12 @@ const motivationalQuotes = [
                         onChange={e => setDistance(e.target.value)}
                         placeholder={type === 'swimming' ? '1000' : '3.1'}
                         step={type === 'swimming' ? '25' : '0.1'}
-                        className="flex-1 p-4 border-2 border-gray-200 rounded-xl text-lg font-bold focus:border-purple-400 outline-none"
+                        className="flex-1 p-4 border-2 border-gray-200 rounded-xl text-lg font-bold focus:border-purple-400 outline-none dark-mode-input"
                       />
                       <select
                         value={distanceUnit}
                         onChange={e => setDistanceUnit(e.target.value)}
-                        className="p-4 border-2 border-gray-200 rounded-xl font-semibold bg-white"
+                        className="p-4 border-2 border-gray-200 rounded-xl font-semibold bg-white dark-mode-input"
                       >
                         {type === 'swimming' ? (
                           <><option value="yards">yards</option><option value="meters">meters</option></>
@@ -1893,15 +1901,15 @@ const motivationalQuotes = [
                     <label className="text-sm font-semibold text-gray-700 block mb-2">Time</label>
                     <div className="flex gap-2">
                       <div className="flex-1">
-                        <input type="number" value={hours} onChange={e => setHours(e.target.value)} placeholder="0" className="w-full p-3 border-2 border-gray-200 rounded-xl text-center font-bold focus:border-purple-400 outline-none" />
+                        <input type="number" value={hours} onChange={e => setHours(e.target.value)} placeholder="0" className="w-full p-3 border-2 border-gray-200 rounded-xl text-center font-bold focus:border-purple-400 outline-none dark-mode-input" />
                         <div className="text-xs text-gray-500 text-center mt-1">hrs</div>
                       </div>
                       <div className="flex-1">
-                        <input type="number" value={minutes} onChange={e => setMinutes(e.target.value)} placeholder="30" className="w-full p-3 border-2 border-gray-200 rounded-xl text-center font-bold focus:border-purple-400 outline-none" />
+                        <input type="number" value={minutes} onChange={e => setMinutes(e.target.value)} placeholder="30" className="w-full p-3 border-2 border-gray-200 rounded-xl text-center font-bold focus:border-purple-400 outline-none dark-mode-input" />
                         <div className="text-xs text-gray-500 text-center mt-1">min</div>
                       </div>
                       <div className="flex-1">
-                        <input type="number" value={seconds} onChange={e => setSeconds(e.target.value)} placeholder="00" className="w-full p-3 border-2 border-gray-200 rounded-xl text-center font-bold focus:border-purple-400 outline-none" />
+                        <input type="number" value={seconds} onChange={e => setSeconds(e.target.value)} placeholder="00" className="w-full p-3 border-2 border-gray-200 rounded-xl text-center font-bold focus:border-purple-400 outline-none dark-mode-input" />
                         <div className="text-xs text-gray-500 text-center mt-1">sec</div>
                       </div>
                     </div>
@@ -1917,7 +1925,7 @@ const motivationalQuotes = [
 
               <div className="mt-4">
                 <label className="text-sm font-semibold text-gray-700 block mb-2">Notes (optional)</label>
-                <textarea value={notes} onChange={e => setNotes(e.target.value)} placeholder="How did it feel?" className="w-full p-3 border-2 border-gray-200 rounded-xl focus:border-purple-400 outline-none resize-none" rows={2} />
+                <textarea value={notes} onChange={e => setNotes(e.target.value)} placeholder="How did it feel?" className="w-full p-3 border-2 border-gray-200 rounded-xl focus:border-purple-400 outline-none resize-none dark-mode-input" rows={2} />
               </div>
 
               <button
@@ -2226,17 +2234,17 @@ const motivationalQuotes = [
                 <button
                   key={cardio.key}
                   onClick={() => onOpenCardio(cardio.key)}
-                  className="bg-white p-2 rounded-xl border border-gray-100 active:scale-[0.98] transition-transform cursor-pointer shadow-sm relative text-center"
+                  className="cardio-card bg-white p-2 rounded-xl border border-gray-100 active:scale-[0.98] transition-transform cursor-pointer shadow-sm relative text-center"
                 >
                   <div className="text-center mb-1">
-                    <div className="w-8 h-8 rounded-lg flex items-center justify-center bg-purple-50 text-purple-600 mx-auto mb-1 text-lg">
+                    <div className="cardio-accent w-8 h-8 rounded-lg flex items-center justify-center bg-purple-50 text-purple-600 mx-auto mb-1 text-lg">
                       <span className="text-xl">{cardio.emoji}</span>
                     </div>
                     <h3 className="font-bold text-gray-900 text-[10px] leading-tight mb-0.5">{cardio.name}</h3>
                     <p className="text-[9px] text-gray-400">Cardio</p>
                   </div>
 
-                  <div className="text-center pt-1 border-t border-gray-100">
+                  <div className="cardio-track text-center pt-1 border-t border-gray-100">
                     <div className="text-[9px] font-bold text-gray-400 uppercase">Track</div>
                     <div className="text-sm font-black text-purple-600">Time + Distance</div>
                   </div>
@@ -2517,6 +2525,7 @@ const motivationalQuotes = [
       const [baselineConfirmed, setBaselineConfirmed] = useState(sessions.length > 0);
       const [note, setNote] = useState('');
       const savedRef = useRef(false);
+      const latestDraftRef = useRef({ loggedSets: [], anchorWeight: '', anchorReps: '', anchorAdjusted: false, note: '' });
 
       const best = useMemo(() => getBestForEquipment(sessions), [sessions]);
       const strongWeight = useMemo(() => getStrongWeightForEquipment(profile, id), [profile, id]);
@@ -2625,22 +2634,24 @@ const motivationalQuotes = [
         setEditingIndex(null);
       };
 
-      const buildSessionPayload = () => {
-        if (loggedSets.length === 0) return null;
+      const buildSessionPayload = (draft) => {
+        const source = draft || { loggedSets, anchorWeight, anchorReps, anchorAdjusted, note };
+        const sets = source.loggedSets || [];
+        if (sets.length === 0) return null;
         const basePayload = {
           date: new Date().toISOString(),
           type: 'strength',
-          sets: loggedSets,
-          anchorWeight: Number(anchorWeight),
-          anchorReps: Number(anchorReps),
-          adjustedToday: anchorAdjusted || false,
-          note: note || undefined
+          sets,
+          anchorWeight: Number(source.anchorWeight),
+          anchorReps: Number(source.anchorReps),
+          adjustedToday: source.anchorAdjusted || false,
+          note: source.note || undefined
         };
         if (sessions.length === 0) {
           return {
             ...basePayload,
-            baselineWeight: Number(anchorWeight),
-            baselineReps: Number(anchorReps)
+            baselineWeight: Number(source.anchorWeight),
+            baselineReps: Number(source.anchorReps)
           };
         }
         return basePayload;
@@ -2657,12 +2668,20 @@ const motivationalQuotes = [
       };
 
       useEffect(() => {
+        latestDraftRef.current = { loggedSets, anchorWeight, anchorReps, anchorAdjusted, note };
+      }, [loggedSets, anchorWeight, anchorReps, anchorAdjusted, note]);
+
+      useEffect(() => {
         return () => {
           if (!savedRef.current) {
-            handleSaveSession();
+            const payload = buildSessionPayload(latestDraftRef.current);
+            if (payload) {
+              onSave(id, payload);
+              savedRef.current = true;
+            }
           }
         };
-      }, [id, loggedSets, anchorWeight, anchorReps, anchorAdjusted, note]);
+      }, [id, onSave]);
 
       const handleClose = () => {
         const saved = handleSaveSession();
