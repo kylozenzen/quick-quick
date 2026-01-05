@@ -1,0 +1,185 @@
+
+    * { box-sizing: border-box; }
+
+    /* BASE LIGHT MODE - Better visual fidelity */
+body { 
+  font-family: 'Inter', sans-serif; 
+  background: #f8f8f8;
+  color: #1a1a1a;
+  -webkit-tap-highlight-color: transparent; 
+  overscroll-behavior: none; 
+  margin: 0;
+  transition: background-color 0.2s ease, color 0.2s ease;
+}
+
+/* Enhanced shadows and borders for light mode */
+.shadow-sm { box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12), 0 1px 2px rgba(0, 0, 0, 0.08); }
+.shadow { box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1), 0 1px 3px rgba(0, 0, 0, 0.08); }
+.shadow-lg { box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1), 0 2px 4px rgba(0, 0, 0, 0.06); }
+.shadow-xl { box-shadow: 0 8px 16px rgba(0, 0, 0, 0.12), 0 4px 8px rgba(0, 0, 0, 0.08); }
+.shadow-2xl { box-shadow: 0 12px 24px rgba(0, 0, 0, 0.15), 0 8px 12px rgba(0, 0, 0, 0.1); }
+
+/* Better card borders in light mode */
+.border-gray-100 { border-color: #e0e0e0 !important; }
+.border-gray-200 { border-color: #d0d0d0 !important; }
+.bg-white { background: #ffffff !important; border: 1px solid #e5e5e5; }
+.bg-gray-50 { background: #fafafa !important; }
+.bg-gray-100 { background: #f0f0f0 !important; }
+
+/* DARK MODE - Subtle neon underglow */
+body.dark-mode { 
+  background: #0a0a0a;
+  color: #e5e5e5;
+}
+body.dark-mode .bg-white { 
+  background: #1a1a1a !important; 
+  color: #e5e5e5 !important;
+  box-shadow: 0 0 20px rgba(139, 92, 246, 0.15),
+              0 0 40px rgba(139, 92, 246, 0.08);
+  border: 1px solid rgba(139, 92, 246, 0.2);
+}
+body.dark-mode .bg-gray-50 { background: #0a0a0a !important; }
+body.dark-mode .bg-gray-100 { 
+  background: #1a1a1a !important;
+  box-shadow: 0 0 15px rgba(139, 92, 246, 0.1);
+}
+body.dark-mode .bg-gray-200 { background: #2a2a2a !important; }
+body.dark-mode .text-gray-900 { color: #f5f5f5 !important; }
+body.dark-mode .text-gray-800 { color: #e5e5e5 !important; }
+body.dark-mode .text-gray-700 { color: #d0d0d0 !important; }
+body.dark-mode .text-gray-600 { color: #a0a0a0 !important; }
+body.dark-mode .text-gray-500 { color: #808080 !important; }
+body.dark-mode .text-gray-400 { color: #666666 !important; }
+body.dark-mode .text-gray-300 { color: #808080 !important; }
+body.dark-mode .border-gray-100 { border-color: rgba(139, 92, 246, 0.15) !important; }
+body.dark-mode .border-gray-200 { border-color: rgba(139, 92, 246, 0.2) !important; }
+body.dark-mode .border-gray-300 { border-color: #4a4a4a !important; }
+
+/* Purple accent with subtle glow */
+body.dark-mode .bg-purple-600 { 
+  background: #8b5cf6 !important;
+  box-shadow: 0 0 30px rgba(139, 92, 246, 0.4),
+              0 0 60px rgba(139, 92, 246, 0.2);
+}
+body.dark-mode .text-purple-600 { color: #a78bfa !important; }
+body.dark-mode .bg-purple-50 { 
+  background: #1a1425 !important;
+  border: 1px solid rgba(139, 92, 246, 0.25);
+  box-shadow: 0 0 15px rgba(139, 92, 246, 0.1);
+}
+body.dark-mode .text-purple-700 { color: #a78bfa !important; }
+body.dark-mode .border-purple-200 { border-color: rgba(139, 92, 246, 0.3) !important; }
+body.dark-mode .border-purple-400 { border-color: #8b5cf6 !important; }
+
+/* Dark mode for motivational quotes */
+body.dark-mode .dark-mode-quote-text { color: #ffffff !important; }
+body.dark-mode .dark-mode-quote-author { color: #a78bfa !important; }
+
+/* Dark mode for plate calculator modal */
+body.dark-mode .dark-mode-modal { 
+  background: #1a1a1a !important; 
+  color: #e5e5e5 !important;
+}
+body.dark-mode .dark-mode-modal h2 { color: #f5f5f5 !important; }
+body.dark-mode .dark-mode-modal label { color: #a0a0a0 !important; }
+body.dark-mode .dark-mode-input { 
+  background: #2a2a2a !important; 
+  color: #ffffff !important;
+  border-color: rgba(139, 92, 246, 0.4) !important;
+}
+body.dark-mode .dark-mode-input::placeholder { color: #666666 !important; }
+
+/* Dark mode for cues and progression boxes */
+body.dark-mode .bg-green-50 { 
+  background: #0f2f1f !important; 
+  border-color: rgba(34, 197, 94, 0.3) !important;
+}
+body.dark-mode .bg-blue-50 { 
+  background: #0f1f2f !important; 
+  border-color: rgba(59, 130, 246, 0.3) !important;
+}
+body.dark-mode .text-green-700 { color: #4ade80 !important; }
+body.dark-mode .text-blue-700 { color: #60a5fa !important; }
+body.dark-mode .text-green-600 { color: #22c55e !important; }
+body.dark-mode .text-blue-600 { color: #3b82f6 !important; }
+body.dark-mode .border-green-200 { border-color: rgba(34, 197, 94, 0.25) !important; }
+body.dark-mode .border-blue-200 { border-color: rgba(59, 130, 246, 0.25) !important; }
+
+/* Dark mode for orange warning card */
+body.dark-mode .bg-orange-50 { 
+  background: #2f1f0f !important; 
+  border-color: rgba(251, 146, 60, 0.3) !important;
+}
+body.dark-mode .bg-red-50 { 
+  background: #2f0f0f !important; 
+}
+body.dark-mode .text-orange-900 { color: #fb923c !important; }
+body.dark-mode .text-orange-700 { color: #fdba74 !important; }
+body.dark-mode .border-orange-300 { border-color: rgba(251, 146, 60, 0.4) !important; }
+body.dark-mode .border-orange-200 { border-color: rgba(251, 146, 60, 0.25) !important; }
+body.dark-mode .border-orange-400 { border-color: #fb923c !important; }
+
+/* Dark mode for yellow completion card */
+body.dark-mode .bg-yellow-50 { 
+  background: #2f2f0f !important; 
+  border-color: rgba(234, 179, 8, 0.3) !important;
+}
+body.dark-mode .text-yellow-900 { color: #fbbf24 !important; }
+body.dark-mode .border-yellow-300 { border-color: rgba(234, 179, 8, 0.4) !important; }
+body.dark-mode .bg-orange-600 { 
+  background: #ea580c !important;
+  box-shadow: 0 0 20px rgba(234, 88, 12, 0.3);
+}
+
+/* Button glow in dark mode */
+body.dark-mode button.bg-purple-600 {
+  box-shadow: 0 4px 20px rgba(139, 92, 246, 0.4),
+              0 0 40px rgba(139, 92, 246, 0.2);
+}
+
+/* Borders */
+.border { border-width: 1px; }
+.border-2 { border-width: 2px; }
+
+/* Subtle glow shadows in dark mode */
+body.dark-mode .shadow-sm { box-shadow: 0 0 10px rgba(139, 92, 246, 0.08); }
+body.dark-mode .shadow { box-shadow: 0 0 15px rgba(139, 92, 246, 0.1); }
+body.dark-mode .shadow-lg { box-shadow: 0 0 20px rgba(139, 92, 246, 0.15); }
+body.dark-mode .shadow-xl { box-shadow: 0 0 25px rgba(139, 92, 246, 0.2); }
+body.dark-mode .shadow-2xl { box-shadow: 0 0 30px rgba(139, 92, 246, 0.25); }
+
+.no-scrollbar::-webkit-scrollbar { display: none; }
+.no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+
+@keyframes slideDown { from { opacity: 0; transform: translateY(-10px); } to { opacity: 1; transform: translateY(0); } }
+@keyframes slideUp { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+@keyframes expandHeight { from { max-height: 0; opacity: 0; } to { max-height: 2000px; opacity: 1; } }
+@keyframes slideInRight { from { opacity: 0; transform: translateX(100%); } to { opacity: 1; transform: translateX(0); } }
+@keyframes slideInLeft { from { opacity: 0; transform: translateX(-100%); } to { opacity: 1; transform: translateX(0); } }
+
+.animate-slide-down { animation: slideDown 0.2s ease-out; }
+.animate-slide-up { animation: slideUp 0.2s ease-out; }
+.animate-slide-in-right { animation: slideInRight 0.3s ease-out; }
+.animate-slide-in-left { animation: slideInLeft 0.3s ease-out; }
+.animate-expand { animation: expandHeight 0.3s ease-out; overflow: hidden; }
+
+input[type="number"]::-webkit-inner-spin-button,
+input[type="number"]::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
+input[type="number"] { -moz-appearance: textfield; }
+
+/* Simplified install prompt */
+.install-prompt {
+  position: fixed;
+  bottom: 90px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: #7c3aed;
+  color: white;
+  padding: 12px 20px;
+  border-radius: 8px;
+  z-index: 1000;
+  animation: slideUp 0.2s ease-out;
+  max-width: 90%;
+}
+
+  
