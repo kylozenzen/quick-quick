@@ -1304,9 +1304,11 @@ const motivationalQuotes = [
       return { score, avgPct: Math.round(avg*100), coveragePct: Math.round(coverage*100), loggedCount: logged.length, total: ids.length };
     };
 
-    const computeAchievements = ({ history, strengthScoreObj, streakObj }) => {
-      const days = uniqueDayKeysFromHistory(history);
-      const sessionsTotal = Object.values(history || {}).reduce((sum, arr) => sum + (arr?.length || 0), 0);
+    const computeAchievements = ({ history, cardioHistory = {}, strengthScoreObj, streakObj }) => {
+      const days = uniqueDayKeysFromHistory(history, cardioHistory);
+      const strengthSessions = Object.values(history || {}).reduce((sum, arr) => sum + (arr?.length || 0), 0);
+      const cardioSessions = Object.values(cardioHistory || {}).reduce((sum, arr) => sum + (arr?.length || 0), 0);
+      const sessionsTotal = strengthSessions + cardioSessions;
       const equipmentLogged = Object.keys(EQUIPMENT_DB).filter(id => (history[id] || []).length > 0).length;
 
       const unlocks = [
@@ -1336,9 +1338,10 @@ const motivationalQuotes = [
     };
 
     // ========== HOME SCREEN ==========
-    const Home = ({ profile, setProfile, history, cardioHistory, appState, setAppState, onGoWorkout, onStartSuggestedWorkout, onGoProfile, onOpenCardio, streakObj, achievements, todayWorkoutType, settings }) => {
+    const Home = ({ profile, setProfile, history, cardioHistory, appState, setAppState, onGoWorkout, onStartSuggestedWorkout, onGoProfile, onOpenCardio, streakObj, achievements, todayWorkoutType, settings, setSettings }) => {
       const [showAchievements, setShowAchievements] = useState(false);
       const [workoutCollapsed, setWorkoutCollapsed] = useState(settings?.suggestedWorkoutCollapsed ?? true);
+      const [selectedPresetId, setSelectedPresetId] = useState(null);
       
       const todayKey = toDayKey(new Date());
       const doneToday = useMemo(() => {
@@ -1348,25 +1351,47 @@ const motivationalQuotes = [
 
       const isRestDayToday = appState?.restDays?.includes(todayKey);
 
-      const lastWorkoutInfo = useMemo(() => {
-        const allSessions = [];
-        Object.entries(history).forEach(([equipId, sessions]) => {
-          sessions.forEach(s => allSessions.push({ ...s, equipId }));
+      const allSessions = useMemo(() => {
+        const combined = [];
+        const seen = new Set();
+        Object.entries(history || {}).forEach(([equipId, sessions]) => {
+          sessions.forEach(s => {
+            const cardioType = s.type === 'cardio' ? (s.cardioType || equipId.replace('cardio_', '')) : null;
+            const id = s.type === 'cardio'
+              ? `${s.date}-${cardioType}-cardio`
+              : `${s.date}-${equipId}-strength`;
+            if (seen.has(id)) return;
+            seen.add(id);
+            combined.push({ ...s, equipId, cardioType: cardioType || s.cardioType, type: s.type || 'strength' });
+          });
         });
-        
+        Object.entries(cardioHistory || {}).forEach(([cardioType, sessions]) => {
+          sessions.forEach(s => {
+            const id = `${s.date}-${s.cardioType || cardioType}-cardio`;
+            if (seen.has(id)) return;
+            seen.add(id);
+            combined.push({ ...s, cardioType: s.cardioType || cardioType, type: 'cardio' });
+          });
+        });
+        return combined;
+      }, [history, cardioHistory]);
+
+      const lastWorkoutInfo = useMemo(() => {
         if (allSessions.length === 0) return null;
-        
-        allSessions.sort((a, b) => new Date(b.date) - new Date(a.date));
-        const last = allSessions[0];
+        const sorted = [...allSessions].sort((a, b) => new Date(b.date) - new Date(a.date));
+        const last = sorted[0];
         const date = new Date(last.date);
         const daysAgo = Math.floor((new Date() - date) / 86400000);
+        const label = last.type === 'cardio'
+          ? (CARDIO_TYPES[last.cardioType]?.name || 'Cardio')
+          : (EQUIPMENT_DB[last.equipId]?.name || 'Unknown');
         
         return {
-          equipment: EQUIPMENT_DB[last.equipId]?.name || 'Unknown',
+          equipment: label,
           daysAgo,
           date: date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
         };
-      }, [history]);
+      }, [allSessions]);
 
       const gymType = GYM_TYPES[profile.gymType];
       const availableTypes = [];
@@ -1393,6 +1418,34 @@ const motivationalQuotes = [
       const homeWorkoutTitle = shouldShowPinnedOnHome ? "Pinned Workout" : `${todayWorkoutType} Day`;
       const homeWorkoutCount = shouldShowPinnedOnHome ? pinnedIds.length : suggestedExercises.length;
       const starterIds = (pinnedIds || []).slice(0, 3);
+      const presetWorkouts = useMemo(() => {
+        const buildPlan = (type) => {
+          const plan = WORKOUT_PLANS[type] || {};
+          const ids = [];
+          availableTypes.forEach(t => ids.push(...(plan[t] || [])));
+          return ids;
+        };
+        const list = [];
+        if (shouldShowPinnedOnHome) {
+          list.push({ id: 'pinned', title: 'Pinned Workout', tag: 'Custom', exercises: homeWorkoutIds });
+        }
+        ['Push','Pull','Legs'].forEach(type => {
+          const ids = buildPlan(type);
+          if (ids.length > 0) list.push({ id: type, title: `${type} Day`, tag: type, exercises: ids });
+        });
+        if (list.length === 0 && homeWorkoutIds.length > 0) {
+          list.push({ id: todayWorkoutType, title: homeWorkoutTitle, tag: todayWorkoutType, exercises: homeWorkoutIds });
+        }
+        return list;
+      }, [availableTypes, homeWorkoutIds, shouldShowPinnedOnHome, homeWorkoutTitle, todayWorkoutType]);
+
+      useEffect(() => {
+        if (presetWorkouts.length > 0 && (!selectedPresetId || !presetWorkouts.some(p => p.id === selectedPresetId))) {
+          setSelectedPresetId(presetWorkouts[0].id);
+        }
+      }, [presetWorkouts, selectedPresetId]);
+
+      const selectedPreset = useMemo(() => presetWorkouts.find(p => p.id === selectedPresetId) || presetWorkouts[0], [presetWorkouts, selectedPresetId]);
 
       const unlockedCount = achievements.filter(a => a.unlocked).length;
 
@@ -1401,6 +1454,20 @@ const motivationalQuotes = [
           ...prev,
           restDays: [...(prev.restDays || []), todayKey]
         }));
+      };
+
+      const handleStartPreset = (preset) => {
+        if (!preset) return;
+        if (preset.id === 'pinned') {
+          onGoWorkout();
+          return;
+        }
+        setAppState(prev => ({
+          ...prev,
+          lastWorkoutType: preset.id,
+          lastWorkoutDayKey: toDayKey(new Date())
+        }));
+        onStartSuggestedWorkout();
       };
 
       return (
@@ -1503,9 +1570,7 @@ const motivationalQuotes = [
               const sevenDaysAgo = new Date();
               sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
               
-              const recentWorkouts = Object.entries(history).flatMap(([equipId, sessions]) =>
-                sessions.map(s => ({ equipId, ...s }))
-              ).filter(w => new Date(w.date) >= sevenDaysAgo)
+              const recentWorkouts = (allSessions || []).filter(w => new Date(w.date) >= sevenDaysAgo)
                 .sort((a, b) => new Date(b.date) - new Date(a.date));
               
               const workoutDays = [...new Set(recentWorkouts.map(w => 
@@ -1520,12 +1585,12 @@ const motivationalQuotes = [
                     <div>
                       <div className="text-xs text-gray-400 font-bold uppercase">Last 7 Days</div>
                       <div className="text-2xl font-black text-gray-900">{workoutDays} {workoutDays === 1 ? 'Day' : 'Days'}</div>
-                      <div className="text-xs text-gray-500">{recentWorkouts.length} total sets</div>
+                      <div className="text-xs text-gray-500">{recentWorkouts.length} total sessions</div>
                     </div>
                     <div className="text-right">
-                      <div className="text-xs text-gray-400 font-semibold">Exercises Hit</div>
+                      <div className="text-xs text-gray-400 font-semibold">Activities Hit</div>
                       <div className="text-2xl font-black text-purple-600">
-                        {[...new Set(recentWorkouts.map(w => w.equipId))].length}
+                        {[...new Set(recentWorkouts.map(w => w.type === 'cardio' ? (CARDIO_TYPES[w.cardioType]?.name || 'Cardio') : (EQUIPMENT_DB[w.equipId]?.name || '')))].filter(Boolean).length}
                       </div>
                     </div>
                   </div>
@@ -1583,56 +1648,82 @@ const motivationalQuotes = [
             ) : (
               <Card>
                 <button 
-                  onClick={() => setWorkoutCollapsed(!workoutCollapsed)}
+                  onClick={() => {
+                    const next = !workoutCollapsed;
+                    setWorkoutCollapsed(next);
+                    setSettings?.(prev => ({ ...(prev || {}), suggestedWorkoutCollapsed: next }));
+                  }}
                   className="w-full flex items-center justify-between"
                 >
                   <div className="text-left">
                     <div className="text-xs text-gray-400 font-bold uppercase">Today's Workout</div>
-                    <div className="text-lg font-black text-gray-900">{homeWorkoutTitle}</div>
-                    <div className="text-xs text-gray-500">{homeWorkoutCount} exercises ready</div>
+                    <div className="text-lg font-black text-gray-900">{selectedPreset?.title || homeWorkoutTitle}</div>
+                    <div className="text-xs text-gray-500">{selectedPreset?.exercises?.length || homeWorkoutCount} exercises ready</div>
                   </div>
                   <div className="flex items-center gap-2">
-                    {!shouldShowPinnedOnHome && (
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          const order = ["Push","Pull","Legs"];
-                          const idx = order.indexOf(todayWorkoutType);
-                          const next = order[(idx + 1) % order.length];
-                          setAppState(prev => ({ ...prev, lastWorkoutType: next, lastWorkoutDayKey: toDayKey(new Date()) }));
-                        }}
-                        className="px-3 py-1.5 bg-gray-50 text-gray-700 rounded-lg text-xs font-bold border border-gray-200 active:scale-95 transition-transform"
-                      >
-                        Swap
-                      </button>
-                    )}
                     <Icon name="ChevronDown" className={`w-5 h-5 text-gray-500 transition-transform ${workoutCollapsed ? '' : 'rotate-180'}`} />
                   </div>
                 </button>
 
                 {!workoutCollapsed && (
-                  <div className="mt-3 animate-expand">
-                    <div className="grid grid-cols-2 gap-2 mb-3">
-                      {(shouldShowPinnedOnHome ? homeWorkoutIds.slice(0, 6) : suggestedExercises.slice(0, 4)).map(id => {
-                        const eq = EQUIPMENT_DB[id];
-                        return (
-                          <div key={id} className="p-3 bg-gray-50 rounded-xl border border-gray-100 text-center shadow-sm">
-                            <div className="text-2xl mb-2">
-                              {eq.type === 'machine' ? '⚙️' : eq.type === 'dumbbell' ? '🏋️' : '🏋️‍♂️'}
+                  <div className="mt-3 animate-expand space-y-3">
+                    <div className="flex overflow-x-auto gap-3 pb-2 snap-x snap-mandatory no-scrollbar">
+                      {presetWorkouts.map(preset => (
+                        <div
+                          key={preset.id}
+                          onClick={() => setSelectedPresetId(preset.id)}
+                          className={`min-w-[78%] snap-center p-4 rounded-2xl border-2 transition-all active:scale-[0.99] shadow-sm ${
+                            selectedPresetId === preset.id ? 'border-purple-300 bg-purple-50' : 'border-gray-100 bg-gray-50'
+                          }`}
+                        >
+                          <div className="flex items-center justify-between mb-2">
+                            <div>
+                              <div className="text-xs font-bold text-gray-400 uppercase">Preset</div>
+                              <div className="text-lg font-black text-gray-900">{preset.title}</div>
+                              <div className="text-[11px] text-gray-500">{preset.tag}</div>
                             </div>
-                            <div className="font-bold text-gray-900 text-xs leading-tight mb-1">{eq.name}</div>
-                            <div className="text-xs text-gray-500">{eq.target}</div>
+                            <div className="px-3 py-1 rounded-full bg-white border border-gray-200 text-xs font-bold text-gray-700">
+                              {preset.exercises.length} moves
+                            </div>
                           </div>
-                        );
-                      })}
+                          <div className="flex flex-wrap gap-1 mb-3">
+                            {preset.exercises.slice(0, 4).map(id => (
+                              <span key={id} className="px-2 py-1 text-[11px] rounded-lg bg-white border border-gray-200 text-gray-700">
+                                {EQUIPMENT_DB[id]?.name?.split(' ')[0] || 'Move'}
+                              </span>
+                            ))}
+                            {preset.exercises.length > 4 && (
+                              <span className="px-2 py-1 text-[11px] rounded-lg bg-white border border-gray-200 text-gray-500">
+                                +{preset.exercises.length - 4} more
+                              </span>
+                            )}
+                          </div>
+                          <button
+                            onClick={(e) => { e.stopPropagation(); handleStartPreset(preset); }}
+                            className="w-full py-2 rounded-xl bg-purple-600 text-white font-bold active:scale-95"
+                          >
+                            Start
+                          </button>
+                        </div>
+                      ))}
                     </div>
 
-                    <button 
-                      onClick={shouldShowPinnedOnHome ? onGoWorkout : onStartSuggestedWorkout}
-                      className="w-full bg-purple-600 text-white font-semibold py-3 rounded-xl mb-2"
-                    >
-                      {shouldShowPinnedOnHome ? "Start Workout" : (doneToday ? "Start Another Set" : "Start Workout")}
-                    </button>
+                    {selectedPreset && (
+                      <div className="p-3 rounded-xl bg-gray-50 border border-gray-100">
+                        <div className="text-[10px] font-black uppercase text-gray-500 mb-1">Preview</div>
+                        <div className="text-sm font-semibold text-gray-900 mb-2">{selectedPreset.title}</div>
+                        <div className="flex flex-wrap gap-2">
+                          {selectedPreset.exercises.slice(0, 6).map(id => (
+                            <span key={id} className="px-3 py-1 bg-white border border-gray-200 rounded-lg text-xs font-bold text-gray-700">
+                              {EQUIPMENT_DB[id]?.name || 'Move'}
+                            </span>
+                          ))}
+                          {selectedPreset.exercises.length === 0 && (
+                            <span className="text-xs text-gray-500">No exercises available for this preset.</span>
+                          )}
+                        </div>
+                      </div>
+                    )}
 
                     <button 
                       onClick={onGoWorkout}
@@ -1689,7 +1780,7 @@ const motivationalQuotes = [
       };
 
       const handleSave = () => {
-        const session = { date: new Date().toISOString(), mode, type };
+        const session = { date: new Date().toISOString(), mode, type: 'cardio', cardioType: type };
         if (mode === 'regular') {
           session.duration = Number(duration);
           session.activity = activity;
@@ -1698,6 +1789,7 @@ const motivationalQuotes = [
           session.distanceUnit = distanceUnit;
           session.timeSeconds = (Number(hours) || 0) * 3600 + (Number(minutes) || 0) * 60 + (Number(seconds) || 0);
           session.pace = calculatePace();
+          session.duration = Math.round((session.timeSeconds || 0) / 60);
         }
         if (notes) session.notes = notes;
         onSave(type, session);
@@ -2418,10 +2510,9 @@ const motivationalQuotes = [
       const [anchorReps, setAnchorReps] = useState('');
       const [anchorAdjusted, setAnchorAdjusted] = useState(false);
       const [showAdjust, setShowAdjust] = useState(false);
-      const [restDefaultSec, setRestDefaultSec] = useState(90);
-      const [restRemainingSec, setRestRemainingSec] = useState(0);
-      const [restRunning, setRestRunning] = useState(false);
       const [loggedSets, setLoggedSets] = useState([]);
+      const [editingIndex, setEditingIndex] = useState(null);
+      const [editValues, setEditValues] = useState({ weight: '', reps: '' });
       const [baselineInputs, setBaselineInputs] = useState({ weight: '', reps: '' });
       const [baselineConfirmed, setBaselineConfirmed] = useState(sessions.length > 0);
       const [note, setNote] = useState('');
@@ -2504,52 +2595,41 @@ const motivationalQuotes = [
         });
         setBaselineConfirmed(sessions.length > 0);
         savedRef.current = false;
-        // Reset rest timer when switching exercises.
-        setRestRunning(false);
-        setRestRemainingSec(0);
       }, [id, defaultAnchor, baselineFromHistory, sessions.length]);
-
-      // Rest timer tick
-      useEffect(() => {
-        if (!restRunning) return;
-        if (restRemainingSec <= 0) {
-          setRestRunning(false);
-          return;
-        }
-        const t = setInterval(() => {
-          setRestRemainingSec(prev => {
-            const next = Math.max(0, (prev || 0) - 1);
-            return next;
-          });
-        }, 1000);
-        return () => clearInterval(t);
-      }, [restRunning, restRemainingSec]);
-
-      const startRest = () => {
-        const sec = Number(restDefaultSec) || 90;
-        setRestRemainingSec(sec);
-        setRestRunning(true);
-      };
-
-      const formatRest = (sec) => {
-        const s = Math.max(0, sec || 0);
-        const m = Math.floor(s / 60);
-        const r = s % 60;
-        return `${m}:${String(r).padStart(2, '0')}`;
-      };
 
       const handleQuickAddSet = () => {
         const w = Number(anchorWeight);
         const r = Number(anchorReps);
         if (!w || !r || w <= 0 || r <= 0) return;
         setLoggedSets(prev => [...prev, { weight: w, reps: r }]);
-        startRest();
+        setEditingIndex(null);
+      };
+
+      const startEditSet = (idx) => {
+        const target = loggedSets[idx];
+        if (!target) return;
+        setEditingIndex(idx);
+        setEditValues({ weight: String(target.weight || ''), reps: String(target.reps || '') });
+      };
+
+      const saveEditedSet = () => {
+        const w = Number(editValues.weight);
+        const r = Number(editValues.reps);
+        if (!w || !r || w <= 0 || r <= 0 || editingIndex === null) return;
+        setLoggedSets(prev => prev.map((set, idx) => idx === editingIndex ? { weight: w, reps: r } : set));
+        setEditingIndex(null);
+      };
+
+      const deleteSet = (idx) => {
+        setLoggedSets(prev => prev.filter((_, i) => i !== idx));
+        setEditingIndex(null);
       };
 
       const buildSessionPayload = () => {
         if (loggedSets.length === 0) return null;
         const basePayload = {
           date: new Date().toISOString(),
+          type: 'strength',
           sets: loggedSets,
           anchorWeight: Number(anchorWeight),
           anchorReps: Number(anchorReps),
@@ -2599,55 +2679,20 @@ const motivationalQuotes = [
         return 10;
       };
 
-      const suggestedSets = useMemo(() => {
+      const overloadSuggestion = useMemo(() => {
+        if (sessions.length < 2) return null;
         const numericAnchorWeight = Number(anchorWeight) || Number(baselineInputs.weight);
         const numericAnchorReps = Number(anchorReps) || Number(baselineInputs.reps);
-
-        if (isBaselineMode) return [];
-
-        if (sessions.length === 0) {
-          if (!numericAnchorWeight || !numericAnchorReps) return [];
-          return [
-            { label: 'Set 1', weight: numericAnchorWeight, reps: numericAnchorReps, note: 'Baseline' },
-            { label: 'Set 2', weight: numericAnchorWeight, reps: numericAnchorReps },
-            { label: 'Set 3', weight: numericAnchorWeight, reps: `${numericAnchorReps}+`, note: 'Optional AMRAP' }
-          ];
-        }
-
-        if (sessions.length === 1) {
-          const lastSets = lastSession?.sets || [];
-          if (lastSets.length > 0) {
-            return lastSets.map((s, idx) => ({
-              label: `Set ${idx + 1}`,
-              weight: s.weight,
-              reps: s.reps,
-              note: idx === lastSets.length - 1 ? 'Match last session' : undefined
-            }));
-          }
-          if (!numericAnchorWeight || !numericAnchorReps) return [];
-          return [
-            { label: 'Set 1', weight: numericAnchorWeight, reps: numericAnchorReps },
-            { label: 'Set 2', weight: numericAnchorWeight, reps: numericAnchorReps },
-            { label: 'Set 3', weight: numericAnchorWeight, reps: `${numericAnchorReps}+`, note: 'Optional AMRAP' }
-          ];
-        }
-
         const baseWeight = recentAnchor.weight || numericAnchorWeight;
         const baseReps = recentAnchor.reps || numericAnchorReps;
-        if (!baseWeight || !baseReps) return [];
-
+        if (!baseWeight || !baseReps) return null;
         const bump = weightBump(baseWeight);
-
-        return [
-          { label: 'Set 1', weight: baseWeight, reps: baseReps + 1, note: 'Same weight, +1 rep' },
-          { label: 'Set 2', weight: baseWeight + bump, reps: baseReps, note: 'Small weight bump' },
-          { label: 'Set 3', weight: baseWeight, reps: `${baseReps}+`, note: 'Optional AMRAP finisher' }
-        ];
-      }, [sessions.length, anchorWeight, anchorReps, baselineInputs, isBaselineMode, lastSession, recentAnchor]);
-
-      const currentSuggestionIndex = suggestedSets.length > 0
-        ? Math.min(loggedSets.length, suggestedSets.length - 1)
-        : 0;
+        return {
+          nextWeight: clampTo5(baseWeight + bump),
+          reps: baseReps,
+          rationale: `${sessions.length >= 2 ? '2 consistent sessions' : 'Recent consistency'} → try +${bump} lb`
+        };
+      }, [sessions.length, anchorWeight, anchorReps, baselineInputs, recentAnchor]);
 
       const handleConfirmBaseline = () => {
         const w = Number(baselineInputs.weight);
@@ -2701,7 +2746,7 @@ const motivationalQuotes = [
                   activeTab === 'cues' ? 'text-purple-600 border-b-2 border-purple-600' : 'text-gray-400'
                 }`}
               >
-                Tips
+                Cues & Info
               </button>
             </div>
 
@@ -2763,9 +2808,9 @@ const motivationalQuotes = [
                               <div className="flex items-start gap-3">
                                 <div className="text-2xl">🧭</div>
                                 <div className="flex-1">
-                                  <div className="text-[10px] font-black uppercase text-purple-700">Baseline setup</div>
+                                  <div className="text-[10px] font-black uppercase text-purple-700">Set your starting point</div>
                                   <p className="text-sm text-purple-900 font-semibold leading-relaxed">
-                                    This is just a starting point. You can change this anytime.
+                                    Set a weight and reps to begin. You can change these anytime.
                                   </p>
                                 </div>
                               </div>
@@ -2796,54 +2841,6 @@ const motivationalQuotes = [
                               >
                                 Set baseline & start logging
                               </button>
-                            </div>
-                          )}
-
-                          {lastSessionInfo && (
-                            <div className="px-3 py-2 rounded-xl bg-gray-50 border border-gray-100">
-                              <div className="text-[10px] font-bold text-gray-400 uppercase">Last session</div>
-                              <div className="text-xs text-gray-700 font-semibold">
-                                {new Date(lastSessionInfo.date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} · {lastSessionInfo.weight} lbs × {lastSessionInfo.reps} · {lastSessionInfo.setCount} sets
-                              </div>
-                            </div>
-                          )}
-
-                          {!isBaselineMode && (
-                            <div className="p-3 rounded-2xl bg-gray-50 border border-gray-100 space-y-2">
-                              <div className="flex items-center justify-between">
-                                <div>
-                                  <div className="text-[10px] font-black uppercase text-gray-500">
-                                    {sessions.length >= 2 ? 'Progression Plan (Today)' : 'Suggested Sets'}
-                                  </div>
-                                  <div className="text-[11px] text-gray-500">
-                                    Show the plan, log reality. Suggestions stay soft.
-                                  </div>
-                                </div>
-                                <div className="text-[10px] font-semibold text-purple-600">
-                                  {sessions.length < 2 ? 'No increases yet' : 'Info only'}
-                                </div>
-                              </div>
-                              {suggestedSets.length === 0 ? (
-                                <div className="text-sm text-gray-500">Set your anchor to see suggestions.</div>
-                              ) : (
-                                <div className="space-y-2">
-                                  {suggestedSets.map((s, idx) => (
-                                    <div
-                                      key={idx}
-                                      className={`p-2 rounded-xl border-2 ${idx === currentSuggestionIndex ? 'border-purple-300 bg-white shadow-sm' : 'border-transparent bg-white'}`}
-                                    >
-                                      <div className="flex items-center justify-between">
-                                        <div className="text-sm font-black text-gray-900">{s.label}</div>
-                                        {idx === currentSuggestionIndex && (
-                                          <div className="text-[10px] font-bold text-purple-600 uppercase">Up next</div>
-                                        )}
-                                      </div>
-                                      <div className="text-sm text-gray-800 font-semibold">{s.weight} lb × {s.reps} reps</div>
-                                      {s.note && <div className="text-[11px] text-gray-500">{s.note}</div>}
-                                    </div>
-                                  ))}
-                                </div>
-                              )}
                             </div>
                           )}
 
@@ -2903,56 +2900,79 @@ const motivationalQuotes = [
                               Add Set
                             </button>
 
-                            <div className="flex items-center justify-between bg-white border border-purple-100 rounded-xl px-3 py-2">
-                              <div>
-                                <div className="text-[10px] font-bold text-gray-400 uppercase">Rest</div>
-                                <div className="text-sm font-black text-gray-900">
-                                  {restRunning ? formatRest(restRemainingSec) : formatRest(restDefaultSec)}
-                                </div>
-                              </div>
-                              <div className="flex items-center gap-2">
-                                <button
-                                  onClick={() => setRestDefaultSec(s => Math.max(15, (Number(s) || 90) - 15))}
-                                  className="px-3 py-2 rounded-lg bg-gray-50 border border-gray-100 text-gray-700 font-bold active:scale-95"
-                                  title="-15s"
-                                >
-                                  −15
-                                </button>
-                                <button
-                                  onClick={() => setRestDefaultSec(s => Math.min(600, (Number(s) || 90) + 15))}
-                                  className="px-3 py-2 rounded-lg bg-gray-50 border border-gray-100 text-gray-700 font-bold active:scale-95"
-                                  title="+15s"
-                                >
-                                  +15
-                                </button>
-                                <button
-                                  onClick={() => {
-                                    if (restRunning) setRestRunning(false);
-                                    else startRest();
-                                  }}
-                                  className={`px-3 py-2 rounded-lg border font-bold active:scale-95 ${restRunning ? 'bg-purple-50 border-purple-200 text-purple-700' : 'bg-white border-gray-200 text-gray-700'}`}
-                                >
-                                  {restRunning ? 'Pause' : 'Start'}
-                                </button>
-                              </div>
-                            </div>
-
                             <div className="text-[10px] text-purple-700/80 font-semibold">
-                              One tap logs a set. Suggestions stay read-only.
+                              Add sets fast. You can edit or delete any set below.
                             </div>
                           </div>
 
-                          <div className="p-3 rounded-2xl bg-white border border-gray-100">
-                            <div className="text-[10px] font-black uppercase text-gray-500 mb-2">Logged sets</div>
+                          <div className="p-3 rounded-2xl bg-white border border-gray-100 space-y-2">
+                            <div className="flex items-center justify-between">
+                              <div className="text-[10px] font-black uppercase text-gray-500">Logged sets</div>
+                              {loggedSets.length > 0 && (
+                                <div className="text-[11px] text-purple-700 font-semibold">{loggedSets.length} sets</div>
+                              )}
+                            </div>
                             {loggedSets.length === 0 ? (
                               <div className="text-sm text-gray-500">No sets logged yet.</div>
                             ) : (
-                              <div className="grid grid-cols-3 gap-2">
+                              <div className="space-y-2">
                                 {loggedSets.map((s, idx) => (
-                                  <div key={idx} className="p-2 rounded-lg bg-gray-50 border border-gray-100 text-center">
-                                    <div className="text-xs font-black text-gray-900">Set {idx + 1}</div>
-                                    <div className="text-sm font-semibold text-gray-800">{s.weight} lb</div>
-                                    <div className="text-[11px] text-gray-500">× {s.reps} reps</div>
+                                  <div
+                                    key={idx}
+                                    className={`p-3 rounded-xl border ${editingIndex === idx ? 'border-purple-300 bg-purple-50' : 'border-gray-100 bg-gray-50'} flex items-center justify-between gap-3`}
+                                  >
+                                    {editingIndex === idx ? (
+                                      <div className="flex-1 grid grid-cols-2 gap-2">
+                                        <input
+                                          type="number"
+                                          inputMode="numeric"
+                                          value={editValues.weight}
+                                          onChange={(e) => setEditValues(prev => ({ ...prev, weight: e.target.value }))}
+                                          className="w-full p-2 rounded-lg border-2 border-purple-200 bg-white font-bold text-center text-gray-900 focus:border-purple-500 outline-none"
+                                        />
+                                        <input
+                                          type="number"
+                                          inputMode="numeric"
+                                          value={editValues.reps}
+                                          onChange={(e) => setEditValues(prev => ({ ...prev, reps: e.target.value }))}
+                                          className="w-full p-2 rounded-lg border-2 border-purple-200 bg-white font-bold text-center text-gray-900 focus:border-purple-500 outline-none"
+                                        />
+                                        <button
+                                          onClick={saveEditedSet}
+                                          className="col-span-2 py-2 rounded-lg bg-purple-600 text-white font-bold active:scale-95"
+                                        >
+                                          Save
+                                        </button>
+                                      </div>
+                                    ) : (
+                                      <div className="flex-1 cursor-pointer" onClick={() => startEditSet(idx)}>
+                                        <div className="text-xs font-black text-gray-900">Set {idx + 1}</div>
+                                        <div className="text-sm font-semibold text-gray-800">{s.weight} lb × {s.reps} reps</div>
+                                      </div>
+                                    )}
+                                    {editingIndex === idx ? (
+                                      <button
+                                        onClick={() => setEditingIndex(null)}
+                                        className="text-gray-500 text-sm font-semibold px-2 py-1"
+                                      >
+                                        Cancel
+                                      </button>
+                                    ) : (
+                                      <div className="flex items-center gap-2">
+                                        <button
+                                          onClick={() => startEditSet(idx)}
+                                          className="px-3 py-1 rounded-lg bg-white border border-gray-200 text-xs font-bold text-gray-700 active:scale-95"
+                                        >
+                                          Edit
+                                        </button>
+                                        <button
+                                          onClick={() => deleteSet(idx)}
+                                          className="px-3 py-1 rounded-lg bg-red-50 border border-red-200 text-xs font-bold text-red-600 active:scale-95"
+                                        >
+                                          ✕
+                                        </button>
+                                      </div>
+                                    )}
                                   </div>
                                 ))}
                               </div>
@@ -2987,27 +3007,62 @@ const motivationalQuotes = [
                   </>
                 ) : (
                   <>
-                    <div className="bg-green-50 border border-green-200 rounded-2xl p-4">
-                      <div className="flex items-center gap-2 mb-3">
-                        <Icon name="Check" className="w-5 h-5 text-green-600"/>
-                        <h3 className="text-xs font-black uppercase text-green-700">Cues</h3>
+                    <div className="space-y-3">
+                      <div className="bg-white border border-gray-100 rounded-2xl p-4">
+                        <div className="flex items-center justify-between mb-1">
+                          <div className="flex items-center gap-2">
+                            <Icon name="Clock" className="w-5 h-5 text-gray-600"/>
+                            <h3 className="text-xs font-black uppercase text-gray-600">Last Session</h3>
+                          </div>
+                          <div className="text-[10px] text-gray-500 font-semibold">Read-only</div>
+                        </div>
+                        {lastSessionInfo ? (
+                          <div className="text-sm font-semibold text-gray-900">
+                            {new Date(lastSessionInfo.date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}: {lastSessionInfo.weight} lb × {lastSessionInfo.reps} · {lastSessionInfo.setCount} sets
+                          </div>
+                        ) : (
+                          <div className="text-sm text-gray-500">Log one session to see your last numbers.</div>
+                        )}
                       </div>
-                      <ul className="space-y-2">
-                        {eq.cues.map((cue, i) => (
-                          <li key={i} className="flex gap-2 text-sm text-gray-900">
-                            <span className="text-green-600 font-bold">•</span>
-                            <span>{cue}</span>
-                          </li>
-                        ))}
-                      </ul>
-                    </div>
 
-                    <div className="bg-blue-50 border border-blue-200 rounded-2xl p-4">
-                      <div className="flex items-center gap-2 mb-3">
-                        <Icon name="Info" className="w-5 h-5 text-blue-600"/>
-                        <h3 className="text-xs font-black uppercase text-blue-700">Progression</h3>
+                      <div className="bg-blue-50 border border-blue-200 rounded-2xl p-4">
+                        <div className="flex items-center gap-2 mb-2">
+                          <Icon name="Target" className="w-5 h-5 text-blue-600"/>
+                          <h3 className="text-xs font-black uppercase text-blue-700">Progressive Overload</h3>
+                        </div>
+                        {overloadSuggestion ? (
+                          <div className="space-y-1">
+                            <div className="text-sm font-black text-gray-900">Suggested next: {overloadSuggestion.nextWeight} lb × {overloadSuggestion.reps}</div>
+                            <div className="text-xs text-gray-600">Why: {overloadSuggestion.rationale}</div>
+                            <div className="text-[11px] text-blue-700 font-semibold">Suggestions stay optional—log what really happened.</div>
+                          </div>
+                        ) : (
+                          <div className="text-sm text-gray-700">Complete 2 sessions to unlock a suggestion.</div>
+                        )}
                       </div>
-                      <p className="text-sm text-gray-900 leading-relaxed">{eq.progression}</p>
+
+                      <div className="bg-green-50 border border-green-200 rounded-2xl p-4">
+                        <div className="flex items-center gap-2 mb-3">
+                          <Icon name="Check" className="w-5 h-5 text-green-600"/>
+                          <h3 className="text-xs font-black uppercase text-green-700">Form Cues</h3>
+                        </div>
+                        <ul className="space-y-2">
+                          {eq.cues.map((cue, i) => (
+                            <li key={i} className="flex gap-2 text-sm text-gray-900">
+                              <span className="text-green-600 font-bold">•</span>
+                              <span>{cue}</span>
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+
+                      <div className="bg-white border border-gray-100 rounded-2xl p-4">
+                        <div className="flex items-center gap-2 mb-3">
+                          <Icon name="Info" className="w-5 h-5 text-blue-600"/>
+                          <h3 className="text-xs font-black uppercase text-blue-700">Progression notes</h3>
+                        </div>
+                        <p className="text-sm text-gray-900 leading-relaxed">{eq.progression}</p>
+                      </div>
                     </div>
                   </>
                 )}
@@ -3027,11 +3082,35 @@ const motivationalQuotes = [
     };
 
     // ========== PROGRESS TAB ==========
-    const Progress = ({ profile, history, strengthScoreObj }) => {
+    const Progress = ({ profile, history, strengthScoreObj, cardioHistory }) => {
       const [selectedEquipment, setSelectedEquipment] = useState(null);
       const [showHistory, setShowHistory] = useState(false);
 
       const allEquipment = Object.keys(EQUIPMENT_DB);
+      const combinedSessions = useMemo(() => {
+        const sessions = [];
+        const seen = new Set();
+        Object.entries(history || {}).forEach(([equipId, arr]) => {
+          (arr || []).forEach(s => {
+            const cardioType = s.type === 'cardio' ? (s.cardioType || equipId.replace('cardio_', '')) : null;
+            const id = s.type === 'cardio'
+              ? `${s.date}-${cardioType}-cardio`
+              : `${s.date}-${equipId}-strength`;
+            if (seen.has(id)) return;
+            seen.add(id);
+            sessions.push({ ...s, equipId, cardioType: cardioType || s.cardioType, type: s.type || 'strength' });
+          });
+        });
+        Object.entries(cardioHistory || {}).forEach(([cardioType, arr]) => {
+          (arr || []).forEach(s => {
+            const id = `${s.date}-${s.cardioType || cardioType}-cardio`;
+            if (seen.has(id)) return;
+            seen.add(id);
+            sessions.push({ ...s, cardioType: s.cardioType || cardioType, type: 'cardio' });
+          });
+        });
+        return sessions;
+      }, [history, cardioHistory]);
 
       const equipmentWithHistory = allEquipment.filter(id => {
         const best = getBestForEquipment(history[id] || []);
@@ -3135,12 +3214,7 @@ const motivationalQuotes = [
                     <Icon name="Clock" className="w-4 h-4 text-gray-400" />
                   </div>
                   {(() => {
-                    const allSessions = [];
-                    Object.entries(history).forEach(([equipId, sessions]) => {
-                      sessions.forEach(s => allSessions.push({ ...s, equipId }));
-                    });
-                    
-                    const sortedSessions = allSessions.sort((a, b) => new Date(b.date) - new Date(a.date));
+                    const sortedSessions = [...combinedSessions].sort((a, b) => new Date(b.date) - new Date(a.date));
                     
                     if (sortedSessions.length === 0) {
                       return <p className="text-sm text-gray-500 text-center py-8">No workouts logged yet</p>;
@@ -3149,37 +3223,53 @@ const motivationalQuotes = [
                     return (
                       <div className="space-y-2">
                         {sortedSessions.map((session, idx) => {
-                          const eq = EQUIPMENT_DB[session.equipId];
-                          const maxWeight = Math.max(...(session.sets || []).map(s => s.weight || 0));
-                          const totalReps = (session.sets || []).reduce((sum, s) => sum + (s.reps || 0), 0);
-                          const sets = (session.sets || []).length;
-                          
+                          const eq = session.type === 'cardio' ? null : EQUIPMENT_DB[session.equipId];
+                          const maxWeight = session.type === 'cardio' ? null : Math.max(...(session.sets || []).map(s => s.weight || 0));
+                          const totalReps = session.type === 'cardio' ? null : (session.sets || []).reduce((sum, s) => sum + (s.reps || 0), 0);
+                          const sets = session.type === 'cardio' ? 0 : (session.sets || []).length;
+                          const cardioLabel = session.type === 'cardio' ? (CARDIO_TYPES[session.cardioType]?.name || 'Cardio') : null;
+                          const durationLabel = session.type === 'cardio' ? (session.duration ? `${session.duration} min` : 'Cardio logged') : null;
+
                           return (
                             <div key={idx} className="p-3 bg-gray-50 rounded-lg border border-gray-100">
                               <div className="flex items-center justify-between mb-2">
                                 <div className="flex items-center gap-2">
-                                  <div className="text-xl">{eq?.type === 'machine' ? '⚙️' : eq?.type === 'dumbbell' ? '🏋️' : '🏋️‍♂️'}</div>
+                                  <div className="text-xl">{session.type === 'cardio' ? '🏃' : eq?.type === 'machine' ? '⚙️' : eq?.type === 'dumbbell' ? '🏋️' : '🏋️‍♂️'}</div>
                                   <div>
-                                    <div className="text-sm font-bold text-gray-900">{eq?.name || 'Unknown'}</div>
+                                    <div className="text-sm font-bold text-gray-900">{cardioLabel || eq?.name || 'Unknown'}</div>
                                     <div className="text-xs text-gray-500">
                                       {new Date(session.date).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })}
                                     </div>
                                   </div>
                                 </div>
-                                <div className="text-right">
-                                  <div className="text-sm font-bold text-purple-600">{maxWeight} lbs</div>
-                                  <div className="text-xs text-gray-500">{sets} × {Math.round(totalReps / sets)} reps</div>
-                                </div>
+                                {session.type === 'cardio' ? (
+                                  <div className="text-right">
+                                    <div className="text-sm font-bold text-purple-600">{durationLabel}</div>
+                                    {session.pace && <div className="text-xs text-gray-500">{session.pace}</div>}
+                                  </div>
+                                ) : (
+                                  <div className="text-right">
+                                    <div className="text-sm font-bold text-purple-600">{maxWeight} lbs</div>
+                                    <div className="text-xs text-gray-500">{sets} × {Math.round(totalReps / (sets || 1))} reps</div>
+                                  </div>
+                                )}
                               </div>
                               
-                              <div className="grid grid-cols-4 gap-1 mt-2">
-                                {(session.sets || []).map((set, i) => (
-                                  <div key={i} className="text-center p-1 bg-white rounded border border-gray-100">
-                                    <div className="text-xs font-bold text-gray-900">{set.weight}</div>
-                                    <div className="text-[10px] text-gray-500">×{set.reps}</div>
-                                  </div>
-                                ))}
-                              </div>
+                              {session.type === 'cardio' ? (
+                                <div className="text-xs text-gray-600">
+                                  {session.activity && <div className="font-semibold text-gray-700 mb-1">{session.activity}</div>}
+                                  {session.notes && <div className="text-gray-500">{session.notes}</div>}
+                                </div>
+                              ) : (
+                                <div className="grid grid-cols-4 gap-1 mt-2">
+                                  {(session.sets || []).map((set, i) => (
+                                    <div key={i} className="text-center p-1 bg-white rounded border border-gray-100">
+                                      <div className="text-xs font-bold text-gray-900">{set.weight}</div>
+                                      <div className="text-[10px] text-gray-500">×{set.reps}</div>
+                                    </div>
+                                  ))}
+                                </div>
+                              )}
                             </div>
                           );
                         })}
@@ -3192,7 +3282,7 @@ const motivationalQuotes = [
               <>
                 {/* Streak Card */}
                 {(() => {
-                  const streakObj = computeStreak(history);
+                  const streakObj = computeStreak(history, cardioHistory);
                   return (
                     <Card>
                       <div className="flex items-center justify-between">
@@ -3241,12 +3331,7 @@ const motivationalQuotes = [
                     <Icon name="Clock" className="w-4 h-4 text-gray-400" />
                   </div>
                   {(() => {
-                    const allSessions = [];
-                    Object.entries(history).forEach(([equipId, sessions]) => {
-                      sessions.forEach(s => allSessions.push({ ...s, equipId }));
-                    });
-                    
-                    const recentSessions = allSessions
+                    const recentSessions = [...combinedSessions]
                       .sort((a, b) => new Date(b.date) - new Date(a.date))
                       .slice(0, 10);
                     
@@ -3257,24 +3342,32 @@ const motivationalQuotes = [
                     return (
                       <div className="space-y-2">
                         {recentSessions.map((session, idx) => {
-                          const eq = EQUIPMENT_DB[session.equipId];
-                          const maxWeight = Math.max(...(session.sets || []).map(s => s.weight || 0));
-                          const totalReps = (session.sets || []).reduce((sum, s) => sum + (s.reps || 0), 0);
+                          const isCardio = session.type === 'cardio';
+                          const eq = isCardio ? null : EQUIPMENT_DB[session.equipId];
+                          const maxWeight = isCardio ? null : Math.max(...(session.sets || []).map(s => s.weight || 0));
+                          const totalReps = isCardio ? null : (session.sets || []).reduce((sum, s) => sum + (s.reps || 0), 0);
                           return (
                             <div key={idx} className="flex items-center justify-between p-2 bg-gray-50 rounded-lg border border-gray-100">
                               <div className="flex items-center gap-2">
-                                <div className="text-lg">{eq?.type === 'machine' ? '⚙️' : eq?.type === 'dumbbell' ? '🏋️' : '🏋️‍♂️'}</div>
+                                <div className="text-lg">{isCardio ? '🏃' : eq?.type === 'machine' ? '⚙️' : eq?.type === 'dumbbell' ? '🏋️' : '🏋️‍♂️'}</div>
                                 <div>
-                                  <div className="text-xs font-bold text-gray-900">{eq?.name || 'Unknown'}</div>
+                                  <div className="text-xs font-bold text-gray-900">{isCardio ? (CARDIO_TYPES[session.cardioType]?.name || 'Cardio') : (eq?.name || 'Unknown')}</div>
                                   <div className="text-[10px] text-gray-500">
                                     {new Date(session.date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
                                   </div>
                                 </div>
                               </div>
-                              <div className="text-right">
-                                <div className="text-xs font-bold text-purple-600">{maxWeight} lbs</div>
-                                <div className="text-[10px] text-gray-500">{totalReps} reps</div>
-                              </div>
+                              {isCardio ? (
+                                <div className="text-right">
+                                  <div className="text-xs font-bold text-purple-600">{session.duration ? `${session.duration} min` : 'Cardio logged'}</div>
+                                  {session.pace && <div className="text-[10px] text-gray-500">{session.pace}</div>}
+                                </div>
+                              ) : (
+                                <div className="text-right">
+                                  <div className="text-xs font-bold text-purple-600">{maxWeight} lbs</div>
+                                  <div className="text-[10px] text-gray-500">{totalReps} reps</div>
+                                </div>
+                              )}
                             </div>
                           );
                         })}
@@ -3901,7 +3994,7 @@ const motivationalQuotes = [
         onboarded: false
       });
 
-      const [settings, setSettings] = useState({ showSuggestions: true, darkMode: false, showAllExercises: false, pinnedExercises: [], workoutViewMode: 'all', suggestedWorkoutCollapsed: false });
+      const [settings, setSettings] = useState({ showSuggestions: true, darkMode: false, showAllExercises: false, pinnedExercises: [], workoutViewMode: 'all', suggestedWorkoutCollapsed: true });
       const [history, setHistory] = useState({});
       const [cardioHistory, setCardioHistory] = useState({});
       const [tab, setTab] = useState('home');
@@ -3953,7 +4046,7 @@ const motivationalQuotes = [
           }
         }
         
-        setSettings(storage.get('ps_v2_settings', { showSuggestions: true, showAllExercises: false, pinnedExercises: [], workoutViewMode: 'all', suggestedWorkoutCollapsed: false }));
+        setSettings(storage.get('ps_v2_settings', { showSuggestions: true, showAllExercises: false, pinnedExercises: [], workoutViewMode: 'all', suggestedWorkoutCollapsed: true }));
         setHistory(storage.get('ps_v2_history', {}));
         setCardioHistory(storage.get('ps_v2_cardio', {}));
         setAppState(storage.get('ps_v2_state', { lastWorkoutType: null, lastWorkoutDayKey: null, restDays: [] }));
@@ -3983,7 +4076,7 @@ const motivationalQuotes = [
 
       const streakObj = useMemo(() => computeStreak(history, cardioHistory, appState?.restDays || []), [history, cardioHistory, appState?.restDays]);
 
-      const achievements = useMemo(() => computeAchievements({ history, strengthScoreObj, streakObj }), [history, strengthScoreObj, streakObj]);
+      const achievements = useMemo(() => computeAchievements({ history, cardioHistory, strengthScoreObj, streakObj }), [history, cardioHistory, strengthScoreObj, streakObj]);
 
       const suggestedExercises = useMemo(() => {
         const gymType = GYM_TYPES[profile.gymType];
@@ -4032,9 +4125,15 @@ const motivationalQuotes = [
       };
 
       const handleSaveCardioSession = (type, session) => {
+        const durationMinutes = session.duration || (session.timeSeconds ? Math.round(session.timeSeconds / 60) : null);
+        const enriched = { ...session, duration: durationMinutes, type: 'cardio', cardioType: type, sets: [] };
         setCardioHistory(prev => ({
           ...prev,
-          [type]: [...(prev[type] || []), session]
+          [type]: [...(prev[type] || []), enriched]
+        }));
+        setHistory(prev => ({
+          ...prev,
+          [`cardio_${type}`]: [...(prev[`cardio_${type}`] || []), enriched]
         }));
         // Unlock beginner mode after first logged strength OR cardio session
         if (profile.beginnerMode && !profile.beginnerUnlocked) {
@@ -4068,12 +4167,12 @@ const motivationalQuotes = [
           setView('intro');
           setTab('home');
           setAppState({ lastWorkoutType: null, lastWorkoutDayKey: null, restDays: [] });
-          setSettings({ showSuggestions: true, darkMode: false, showAllExercises: false, pinnedExercises: [], workoutViewMode: 'all', suggestedWorkoutCollapsed: false });
+          setSettings({ showSuggestions: true, darkMode: false, showAllExercises: false, pinnedExercises: [], workoutViewMode: 'all', suggestedWorkoutCollapsed: true });
           storage.set('ps_v2_profile', null);
           storage.set('ps_v2_history', {});
           storage.set('ps_v2_cardio', {});
           storage.set('ps_v2_state', { lastWorkoutType: null, lastWorkoutDayKey: null, restDays: [] });
-          storage.set('ps_v2_settings', { showSuggestions: true, darkMode: false, showAllExercises: false, pinnedExercises: [], workoutViewMode: 'all', suggestedWorkoutCollapsed: false });
+          storage.set('ps_v2_settings', { showSuggestions: true, darkMode: false, showAllExercises: false, pinnedExercises: [], workoutViewMode: 'all', suggestedWorkoutCollapsed: true });
         }
       };
 
@@ -4209,6 +4308,7 @@ const motivationalQuotes = [
                       achievements={achievements}
                       todayWorkoutType={todayWorkoutType}
                       settings={settings}
+                      setSettings={setSettings}
                     />
                   )}
                   {tab === 'workout' && (
@@ -4228,6 +4328,7 @@ const motivationalQuotes = [
                       profile={profile}
                       history={history}
                       strengthScoreObj={strengthScoreObj}
+                      cardioHistory={cardioHistory}
                     />
                   )}
                   {tab === 'profile' && (
