@@ -211,6 +211,29 @@ const { useState, useEffect, useMemo, useRef } = React;
       { id: 'health', label: 'General Health', emoji: '❤️', desc: 'Keep it simple and sustainable', bias: { reps: 'middle', cardio: 'middle' } },
     ];
 
+    const APP_STYLES = {
+      just: { id: 'just_lift', label: 'Just Lift', desc: 'Log sets fast. No insights. No commentary.' },
+      progress: { id: 'lift_progress', label: 'Lift + Progress', desc: 'Track progress and see simple trends. Still fast.' },
+      new: { id: 'new_gym', label: 'New to the Gym', desc: 'Extra guidance, tips, and reassurance. Nothing is locked in.' }
+    };
+
+    const REASSURANCE_LINES = [
+      "Form > weight.",
+      "Lighter is okay.",
+      "Showing up counts.",
+      "You can adjust anytime.",
+      "Small jumps add up."
+    ];
+
+    const QUICK_GLOSSARY = {
+      Set: "One round of reps before resting.",
+      Rep: "One full movement of the exercise.",
+      Weight: "Load used for this set."
+    };
+
+    const APP_STYLE_KEY = 'ps_app_style';
+    const STYLE_ONBOARD_KEY = 'ps_style_onboarded';
+
     const DIFFICULTY_LEVELS = [
       { value: 'easy', label: 'Easy', emoji: '✅', desc: 'Could do 3+ more reps' },
       { value: 'good', label: 'Good', emoji: '💪', desc: '1–2 reps in tank' },
@@ -817,6 +840,30 @@ const motivationalQuotes = [
 
     const STORAGE_VERSION = 3;
     const STORAGE_KEY = 'ps_v3_meta';
+    const SESSION_TIMEOUT_MS = 90 * 60 * 1000;
+
+    const DEFAULT_SETTINGS = {
+      showSuggestions: true,
+      darkMode: false,
+      showAllExercises: false,
+      pinnedExercises: [],
+      workoutViewMode: 'all',
+      suggestedWorkoutCollapsed: true,
+      appStyle: APP_STYLES.just.id,
+      showLastTime: true,
+      showDeltas: true,
+      showTips: true,
+      weeklySummarySeenWeek: null,
+      welcomeShownDay: null
+    };
+
+    const DEFAULT_APP_STATE = {
+      lastWorkoutType: null,
+      lastWorkoutDayKey: null,
+      restDays: [],
+      activeSession: null,
+      lastWelcomeBackDay: null
+    };
 
     const uniqueDayKeysFromHistory = (history, cardioHistory = {}, restDays = [], dayEntries = null) => {
       if (dayEntries && Object.keys(dayEntries).length > 0) {
@@ -869,6 +916,68 @@ const motivationalQuotes = [
       }
 
       return { current, best, lastDayKey: anchor, hasToday: anchor === todayKey };
+    };
+
+    const getWeekKey = (date) => {
+      const d = new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()));
+      const dayNum = d.getUTCDay() || 7;
+      d.setUTCDate(d.getUTCDate() + 4 - dayNum);
+      const yearStart = new Date(Date.UTC(d.getUTCFullYear(), 0, 1));
+      const weekNo = Math.ceil((((d - yearStart) / 86400000) + 1) / 7);
+      return `${d.getUTCFullYear()}-w${String(weekNo).padStart(2, '0')}`;
+    };
+
+    const computeWeeklySummaryLine = (dayEntries = {}) => {
+      const countsByWeek = {};
+      Object.values(dayEntries || {}).forEach(entry => {
+        if (entry.type !== 'workout') return;
+        const key = getWeekKey(new Date(entry.date));
+        countsByWeek[key] = (countsByWeek[key] || 0) + 1;
+      });
+      const weeks = Object.keys(countsByWeek).sort();
+      const currentWeek = getWeekKey(new Date());
+      const currentCount = countsByWeek[currentWeek] || 0;
+      const prevWeekKey = weeks.length > 0 ? weeks[weeks.length - 2] : null;
+      const prevCount = prevWeekKey ? (countsByWeek[prevWeekKey] || 0) : 0;
+
+      if (currentCount === 0 && prevCount === 0) return null;
+      if (currentCount > 0 && prevCount === 0) return `${currentCount} workout${currentCount === 1 ? '' : 's'} this week`;
+      const delta = currentCount - prevCount;
+      const deltaText = delta > 0 ? `↑ ${delta} vs last week` : delta < 0 ? `↓ ${Math.abs(delta)} vs last week` : 'Same as last week';
+      return `${currentCount} workout${currentCount === 1 ? '' : 's'} this week · ${deltaText}`;
+    };
+
+    const flattenSessions = (history = {}, cardioHistory = {}) => {
+      const sessions = [];
+      Object.entries(history || {}).forEach(([equipId, arr]) => {
+        (arr || []).forEach(s => sessions.push({ ...s, equipId, type: s.type || 'strength', cardioType: s.cardioType }));
+      });
+      Object.entries(cardioHistory || {}).forEach(([cardioType, arr]) => {
+        (arr || []).forEach(s => sessions.push({ ...s, cardioType, equipId: `cardio_${cardioType}`, type: 'cardio' }));
+      });
+      return sessions.sort((a, b) => new Date(b.date) - new Date(a.date));
+    };
+
+    const getLastWorkoutDate = (dayEntries = {}) => {
+      const workoutDays = Object.values(dayEntries || {}).filter(e => e.type === 'workout').map(e => e.date);
+      if (workoutDays.length === 0) return null;
+      const sorted = workoutDays.sort((a, b) => new Date(b) - new Date(a));
+      return new Date(sorted[0]);
+    };
+
+    const detectRecentTrend = (sessions = []) => {
+      if (!sessions || sessions.length < 3) return null;
+      const weights = sessions
+        .slice(0, 3)
+        .map(s => {
+          const maxWeight = Math.max(...(s.sets || []).map(set => set.weight || 0));
+          return isNaN(maxWeight) ? 0 : maxWeight;
+        })
+        .filter(Boolean);
+      if (weights.length < 3) return null;
+      const isUp = weights[0] < weights[1] && weights[1] <= weights[2];
+      if (isUp) return "Trending up over last 3 sessions.";
+      return null;
     };
 
     const buildDayEntriesFromHistory = (history = {}, cardioHistory = {}, restDays = []) => {
@@ -1033,6 +1142,53 @@ const motivationalQuotes = [
         </div>
       </div>
     );
+
+    const StyleOnboarding = ({ onSelect, defaultStyle = APP_STYLES.just.id }) => {
+      const [selected, setSelected] = useState(defaultStyle);
+
+      const styles = [
+        { ...APP_STYLES.just, note: "Log sets fast. No insights. No commentary." },
+        { ...APP_STYLES.progress, note: "Track progress and see simple trends. Still fast." },
+        { ...APP_STYLES.new, note: "Extra guidance, tips, and reassurance. Nothing is locked in." }
+      ];
+
+      return (
+        <div className="min-h-screen bg-gray-50 flex flex-col" style={{ paddingTop: 'env(safe-area-inset-top)' }}>
+          <div className="p-6 pb-3">
+            <div className="text-xs font-bold text-purple-600 uppercase">Planet Strength</div>
+            <h1 className="text-2xl font-black text-gray-900 leading-tight mt-1">How do you want the app to show up for you?</h1>
+            <p className="text-sm text-gray-600 mt-2">Choose your vibe. Change anytime in Settings.</p>
+          </div>
+
+          <div className="flex-1 overflow-y-auto p-6 pt-0 space-y-3 pb-10">
+            {styles.map(style => {
+              const isActive = selected === style.id;
+              return (
+                <button
+                  key={style.id}
+                  onClick={() => { setSelected(style.id); onSelect(style.id); }}
+                  className={`w-full text-left p-4 rounded-2xl border-2 transition-all shadow-sm ${isActive ? 'border-purple-500 bg-purple-50' : 'border-gray-200 bg-white hover:border-purple-200'}`}
+                >
+                  <div className="flex items-start gap-3">
+                    <div className="text-2xl" aria-hidden>💫</div>
+                    <div className="flex-1">
+                      <div className={`font-black text-base ${isActive ? 'text-purple-700' : 'text-gray-900'}`}>{style.label}</div>
+                      <p className="text-sm text-gray-600 mt-1 leading-relaxed">{style.desc}</p>
+                      <p className="text-xs text-gray-500 mt-1">{style.note}</p>
+                    </div>
+                    {isActive && <Icon name="Check" className="w-5 h-5 text-purple-600" />}
+                  </div>
+                </button>
+              );
+            })}
+
+            <div className="text-center text-xs text-gray-500 mt-4">
+              Change anytime in Settings.
+            </div>
+          </div>
+        </div>
+      );
+    };
 
     // ========== ONBOARDING ==========
     const IntroScreen = ({ onComplete }) => {
@@ -1432,8 +1588,25 @@ const motivationalQuotes = [
 
     // ========== HOME SCREEN ==========
     
-const Home = ({ profile, streakObj, onStartWorkout, onGenerate, quoteIndex, onRefreshQuote }) => {
+const Home = ({
+  profile,
+  streakObj,
+  onStartWorkout,
+  onGenerate,
+  quoteIndex,
+  onRefreshQuote,
+  appStyle,
+  weeklySummary,
+  onWeeklySeen,
+  reassuranceLine,
+  onReassuranceNext,
+  showWelcomeBack,
+  onDismissWelcome,
+  tipsEnabled
+}) => {
   const quote = motivationalQuotes[quoteIndex % motivationalQuotes.length];
+  const [glossaryTerm, setGlossaryTerm] = useState(null);
+  const showTips = appStyle === APP_STYLES.new.id && tipsEnabled;
 
   return (
     <div className="flex flex-col h-full bg-gray-50">
@@ -1466,6 +1639,29 @@ const Home = ({ profile, streakObj, onStartWorkout, onGenerate, quoteIndex, onRe
           </div>
         </Card>
 
+        {weeklySummary && (
+          <Card className="bg-blue-50 border-blue-200 flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <Icon name="Activity" className="w-5 h-5 text-blue-600" />
+              <div className="text-sm font-semibold text-blue-800">{weeklySummary}</div>
+            </div>
+            <button onClick={() => onWeeklySeen && onWeeklySeen()} className="text-xs font-bold text-blue-700 underline">Got it</button>
+          </Card>
+        )}
+
+        {showWelcomeBack && (
+          <Card className="bg-green-50 border-green-200 flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <span className="text-2xl">👋</span>
+              <div>
+                <div className="text-sm font-bold text-green-800">Welcome back.</div>
+                <div className="text-xs text-green-700">Pick any lift and log a quick set.</div>
+              </div>
+            </div>
+            <button onClick={() => onDismissWelcome && onDismissWelcome()} className="text-xs font-bold text-green-700 underline">Dismiss</button>
+          </Card>
+        )}
+
         <Card className="flex items-center justify-between bg-gradient-to-r from-orange-50 to-yellow-50 border-orange-200">
           <div className="flex items-center gap-3">
             <div className="text-3xl">🔥</div>
@@ -1475,20 +1671,24 @@ const Home = ({ profile, streakObj, onStartWorkout, onGenerate, quoteIndex, onRe
               <div className="text-xs text-gray-500">Best: {streakObj.best} days</div>
             </div>
           </div>
-          <button
-            onClick={onStartWorkout}
-            className="px-4 py-2 rounded-xl bg-purple-600 text-white font-bold shadow active:scale-95 transition-all"
-          >
-            Start
-          </button>
         </Card>
 
         <button
           onClick={onStartWorkout}
           className="w-full py-4 rounded-2xl bg-purple-600 text-white font-bold text-lg shadow-lg active:scale-95 transition-all"
         >
-          Start Workout
+          Log a Set
         </button>
+
+        {showTips && reassuranceLine && (
+          <Card className="bg-purple-50 border-purple-200 flex items-center justify-between">
+            <div>
+              <div className="text-xs font-bold text-purple-600 uppercase">You're good</div>
+              <div className="text-sm font-semibold text-purple-900">{reassuranceLine}</div>
+            </div>
+            <button onClick={() => onReassuranceNext && onReassuranceNext()} className="text-xs font-bold text-purple-700 underline">New line</button>
+          </Card>
+        )}
 
         <Card className="space-y-3">
           <div className="flex items-center justify-between">
@@ -1519,15 +1719,63 @@ const Home = ({ profile, streakObj, onStartWorkout, onGenerate, quoteIndex, onRe
             Generated workouts will open in the Workout tab for quick edits.
           </div>
         </Card>
+
+        {showTips && (
+          <Card className="space-y-2">
+            <div className="text-xs font-bold text-purple-700 uppercase">Quick glossary</div>
+            <div className="flex gap-2 flex-wrap">
+              {Object.keys(QUICK_GLOSSARY).map(term => (
+                <button
+                  key={term}
+                  onClick={() => setGlossaryTerm(glossaryTerm === term ? null : term)}
+                  className={`px-3 py-2 rounded-full text-xs font-bold border ${glossaryTerm === term ? 'bg-purple-600 text-white border-purple-600' : 'bg-white text-purple-700 border-purple-200'}`}
+                >
+                  {term}
+                </button>
+              ))}
+            </div>
+            {glossaryTerm && (
+              <div className="text-sm text-gray-700 bg-gray-50 border border-gray-200 rounded-xl p-3">
+                {QUICK_GLOSSARY[glossaryTerm]}
+              </div>
+            )}
+          </Card>
+        )}
       </div>
     </div>
   );
 };
 
-const Workout = ({ profile, history, onEquipmentSelect, onOpenCardio, settings, setSettings, todayWorkoutType, pinnedExercises, setPinnedExercises, recentExercises, generatedWorkout, onRegenerateGeneratedWorkout, onSwapGeneratedExercise, onStartGeneratedWorkout, onLogRestDay, restDayLogged, hasWorkoutToday }) => {
+const Workout = ({
+  profile,
+  history,
+  onEquipmentSelect,
+  onOpenCardio,
+  settings,
+  setSettings,
+  todayWorkoutType,
+  pinnedExercises,
+  setPinnedExercises,
+  recentExercises,
+  generatedWorkout,
+  onRegenerateGeneratedWorkout,
+  onSwapGeneratedExercise,
+  onStartGeneratedWorkout,
+  onLogRestDay,
+  restDayLogged,
+  hasWorkoutToday,
+  appStyle,
+  activeSession,
+  onEndSession,
+  recentSessions = [],
+  trendText,
+  reassuranceLine
+}) => {
   const [searchQuery, setSearchQuery] = useState('');
   const [showLibrary, setShowLibrary] = useState(false);
   const [swapIndex, setSwapIndex] = useState(null);
+  const [showRecent, setShowRecent] = useState(false);
+  const showTips = appStyle === APP_STYLES.new.id && settings.showTips !== false;
 
   const gymType = GYM_TYPES[profile.gymType];
 
@@ -1597,6 +1845,23 @@ const Workout = ({ profile, history, onEquipmentSelect, onOpenCardio, settings, 
     return pool.slice(0, 20);
   }, [swapIndex, generatedWorkout, availableEquipment]);
 
+  const displayedSessions = useMemo(() => (recentSessions || []).slice(0, showRecent ? 3 : 1), [recentSessions, showRecent]);
+
+  const formatSession = (session) => {
+    const dateLabel = session.date ? new Date(session.date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : 'Recent';
+    if (session.type === 'cardio') {
+      const title = CARDIO_TYPES[session.cardioType]?.name || 'Cardio';
+      const duration = session.duration ? `${session.duration} min` : 'Logged';
+      return `${dateLabel} • ${title} • ${duration}`;
+    }
+    const eq = EQUIPMENT_DB[session.equipId];
+    const weights = (session.sets || []).map(s => s.weight || 0);
+    const maxWeight = weights.length ? Math.max(...weights) : 0;
+    const reps = (session.sets || []).reduce((sum, set) => sum + (set.reps || 0), 0);
+    const sets = session.sets?.length || 0;
+    return `${dateLabel} • ${eq?.name || 'Lift'} • ${maxWeight || '—'} lb · ${sets} sets · ${reps || 0} reps`;
+  };
+
   return (
     <div className="flex flex-col h-full bg-gray-50">
       <div className="bg-white border-b border-gray-100 sticky top-0 z-20" style={{ paddingTop: 'env(safe-area-inset-top)' }}>
@@ -1635,6 +1900,41 @@ const Workout = ({ profile, history, onEquipmentSelect, onOpenCardio, settings, 
       </div>
 
       <div className="flex-1 overflow-y-auto pb-28 px-4 space-y-4">
+        {activeSession && (
+          <Card className="flex items-center justify-between bg-green-50 border-green-200">
+            <div>
+              <div className="text-xs font-bold text-green-700 uppercase">Session active</div>
+              <div className="text-sm font-semibold text-gray-800">Auto-ends after quiet time.</div>
+            </div>
+            <button onClick={onEndSession} className="text-xs font-bold text-green-700 underline">End</button>
+          </Card>
+        )}
+
+        {recentSessions.length > 0 && (
+          <Card className="space-y-2">
+            <div className="flex items-center justify-between">
+              <div className="text-xs font-bold text-gray-500 uppercase">Recent Lifts</div>
+              <button onClick={() => setShowRecent(!showRecent)} className="text-xs font-bold text-purple-700 underline">
+                {showRecent ? 'Hide' : 'Expand'}
+              </button>
+            </div>
+            {displayedSessions.map((session, idx) => (
+              <div key={idx} className="text-sm font-semibold text-gray-800">
+                {formatSession(session)}
+              </div>
+            ))}
+            {appStyle === APP_STYLES.progress.id && trendText && (
+              <div className="text-xs text-blue-700 font-semibold">{trendText}</div>
+            )}
+          </Card>
+        )}
+
+        {showTips && reassuranceLine && (
+          <Card className="bg-purple-50 border-purple-200 text-sm text-purple-900">
+            {reassuranceLine}
+          </Card>
+        )}
+
         {generatedWorkout && (
           <Card className="space-y-3 border-purple-200 bg-purple-50">
             <div className="flex items-center justify-between">
@@ -1870,7 +2170,7 @@ const PlateCalculator = ({ targetWeight, barWeight, onClose }) => {
     };
 
     // ========== EQUIPMENT DETAIL ==========
-    const EquipmentDetail = ({ id, profile, history, onSave, onClose }) => {
+const EquipmentDetail = ({ id, profile, history, onSave, onClose, settings, appStyle, onEndSession }) => {
       const eq = EQUIPMENT_DB[id];
       const sessions = history || [];
       const [activeTab, setActiveTab] = useState('workout');
@@ -1886,8 +2186,14 @@ const PlateCalculator = ({ targetWeight, barWeight, onClose }) => {
       const [baselineInputs, setBaselineInputs] = useState({ weight: '', reps: '' });
       const [baselineConfirmed, setBaselineConfirmed] = useState(sessions.length > 0);
       const [note, setNote] = useState('');
+      const [historyExpanded, setHistoryExpanded] = useState(false);
       const savedRef = useRef(false);
       const latestDraftRef = useRef({ loggedSets: [], anchorWeight: '', anchorReps: '', anchorAdjusted: false, note: '' });
+      const currentStyle = appStyle || settings?.appStyle || APP_STYLES.just.id;
+      const showLastRef = settings?.showLastTime !== false;
+      const showDeltas = settings?.showDeltas !== false;
+      const isProgressStyle = currentStyle === APP_STYLES.progress.id;
+      const isNewStyle = currentStyle === APP_STYLES.new.id && settings?.showTips !== false;
 
       const best = useMemo(() => getBestForEquipment(sessions), [sessions]);
       const strongWeight = useMemo(() => getStrongWeightForEquipment(profile, id), [profile, id]);
@@ -1942,6 +2248,17 @@ const PlateCalculator = ({ targetWeight, barWeight, onClose }) => {
           setCount: lastSets.length
         };
       }, [sessions]);
+      const recentHistory = useMemo(() => {
+        const sorted = [...sessions].sort((a, b) => new Date(b.date) - new Date(a.date));
+        return sorted.slice(0, 5);
+      }, [sessions]);
+      const deltaFromLast = useMemo(() => {
+        if (!lastSessionInfo || !anchorWeight) return null;
+        const diff = Number(anchorWeight) - Number(lastSessionInfo.weight || 0);
+        if (!isFinite(diff)) return null;
+        if (diff === 0) return 'Even vs last time';
+        return `${diff > 0 ? '+' : ''}${diff} lbs vs last time`;
+      }, [lastSessionInfo, anchorWeight]);
 
       const lastSession = sessions[sessions.length - 1];
       const defaultAnchor = useMemo(() => {
@@ -2233,6 +2550,16 @@ const PlateCalculator = ({ targetWeight, barWeight, onClose }) => {
                                   {anchorWeight && anchorReps ? `${anchorWeight} lb × ${anchorReps} reps` : 'Set your anchor'}
                                 </div>
                                 {anchorAdjusted && <div className="text-[11px] text-purple-700 font-semibold">Adjusted today</div>}
+                                {showLastRef && lastSessionInfo && (
+                                  <div className="text-[11px] text-gray-600 mt-1">
+                                    Last time: {lastSessionInfo.weight} lb × {lastSessionInfo.reps}
+                                    {showDeltas && deltaFromLast && (
+                                      <span className={`ml-1 font-bold ${deltaFromLast.includes('+') ? 'text-green-600' : deltaFromLast.includes('-') ? 'text-orange-600' : 'text-gray-700'}`}>
+                                        {deltaFromLast}
+                                      </span>
+                                    )}
+                                  </div>
+                                )}
                               </div>
                               <button
                                 onClick={() => setShowAdjust(v => !v)}
@@ -2381,6 +2708,14 @@ const PlateCalculator = ({ targetWeight, barWeight, onClose }) => {
                               className="w-full p-3 rounded-xl border border-gray-200 bg-gray-50 text-sm text-gray-800 focus:border-purple-400 outline-none"
                               rows={2}
                             />
+                            {onEndSession && (
+                              <button
+                                onClick={() => { handleClose(); onEndSession(); }}
+                                className="text-xs font-bold text-gray-500 underline mt-2"
+                              >
+                                End session now
+                              </button>
+                            )}
                           </div>
                         </div>
                       )}
@@ -2406,21 +2741,52 @@ const PlateCalculator = ({ targetWeight, barWeight, onClose }) => {
                         )}
                       </div>
 
-                      <div className="bg-blue-50 border border-blue-200 rounded-2xl p-4">
-                        <div className="flex items-center gap-2 mb-2">
-                          <Icon name="Target" className="w-5 h-5 text-blue-600"/>
-                          <h3 className="text-xs font-black uppercase text-blue-700">Progressive Overload</h3>
-                        </div>
-                        {overloadSuggestion ? (
-                          <div className="space-y-1">
-                            <div className="text-sm font-black text-gray-900">Suggested next: {overloadSuggestion.nextWeight} lb × {overloadSuggestion.reps}</div>
-                            <div className="text-xs text-gray-600">Why: {overloadSuggestion.rationale}</div>
-                            <div className="text-[11px] text-blue-700 font-semibold">Suggestions stay optional—log what really happened.</div>
+                      {isProgressStyle && (
+                        <div className="bg-blue-50 border border-blue-200 rounded-2xl p-4">
+                          <div className="flex items-center gap-2 mb-2">
+                            <Icon name="Target" className="w-5 h-5 text-blue-600"/>
+                            <h3 className="text-xs font-black uppercase text-blue-700">Progressive Overload</h3>
                           </div>
-                        ) : (
-                          <div className="text-sm text-gray-700">Complete 2 sessions to unlock a suggestion.</div>
-                        )}
-                      </div>
+                          {overloadSuggestion ? (
+                            <div className="space-y-1">
+                              <div className="text-sm font-black text-gray-900">Suggested next: {overloadSuggestion.nextWeight} lb × {overloadSuggestion.reps}</div>
+                              <div className="text-xs text-gray-600">Why: {overloadSuggestion.rationale}</div>
+                              <div className="text-[11px] text-blue-700 font-semibold">Suggestions stay optional—log what really happened.</div>
+                            </div>
+                          ) : (
+                            <div className="text-sm text-gray-700">Complete 2 sessions to unlock a suggestion.</div>
+                          )}
+                        </div>
+                      )}
+
+                      {isProgressStyle && recentHistory.length > 0 && (
+                        <div className="bg-white border border-gray-100 rounded-2xl p-4">
+                          <button
+                            className="w-full flex items-center justify-between"
+                            onClick={() => setHistoryExpanded(!historyExpanded)}
+                          >
+                            <div className="flex items-center gap-2">
+                              <Icon name="Clock" className="w-5 h-5 text-gray-600"/>
+                              <h3 className="text-xs font-black uppercase text-gray-600">Recent sessions</h3>
+                            </div>
+                            <Icon name="ChevronDown" className={`w-4 h-4 text-gray-500 transition-transform ${historyExpanded ? 'rotate-180' : ''}`} />
+                          </button>
+                          {historyExpanded && (
+                            <div className="mt-3 space-y-2">
+                              {recentHistory.map((session, idx) => {
+                                const maxWeight = Math.max(...(session.sets || []).map(s => s.weight || 0));
+                                const dateLabel = new Date(session.date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+                                const reps = (session.sets || []).reduce((sum, s) => sum + (s.reps || 0), 0);
+                                return (
+                                  <div key={idx} className="text-sm text-gray-800">
+                                    {dateLabel}: {maxWeight || '—'} lb · {(session.sets || []).length} sets · {reps} reps
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          )}
+                        </div>
+                      )}
 
                       <div className="bg-green-50 border border-green-200 rounded-2xl p-4">
                         <div className="flex items-center gap-2 mb-3">
@@ -2826,11 +3192,12 @@ const PlateCalculator = ({ targetWeight, barWeight, onClose }) => {
     };
 
     // ========== PROFILE TAB ==========
-    const ProfileView = ({ profile, setProfile, settings, setSettings, onReset, onExportData, onImportData, streakObj, workoutCount = 0, restDayCount = 0, onViewAnalytics }) => {
+    const ProfileView = ({ profile, setProfile, settings, setSettings, onReset, onExportData, onImportData, streakObj, workoutCount = 0, restDayCount = 0, onViewAnalytics, onStyleChange, onResetOnboarding }) => {
       const [showLearn, setShowLearn] = useState(false);
       const [expandedTopic, setExpandedTopic] = useState(null);
       const [showAvatarPicker, setShowAvatarPicker] = useState(false);
       const [showUpdateProfile, setShowUpdateProfile] = useState(false);
+      const currentStyle = settings?.appStyle || APP_STYLES.just.id;
 
       const avatarOptions = ['🦁','🐻','🦅','🐺','🦈','🦖','🐯','🦍','🐉','⚡','🔥','💪','🎯','🚀'];
 
@@ -3053,6 +3420,33 @@ const PlateCalculator = ({ targetWeight, barWeight, onClose }) => {
               )}
             </Card>
 
+            <Card className="mb-4">
+              <div className="flex items-center justify-between mb-3">
+                <div>
+                  <div className="text-xs font-bold text-gray-500 uppercase">App Style</div>
+                  <div className="text-sm font-semibold text-gray-900">Change anytime</div>
+                </div>
+                <button onClick={() => onResetOnboarding && onResetOnboarding()} className="text-xs font-bold text-purple-700 underline">Reset onboarding</button>
+              </div>
+              <div className="space-y-2">
+                {Object.values(APP_STYLES).map(style => {
+                  const active = currentStyle === style.id;
+                  return (
+                    <button
+                      key={style.id}
+                      onClick={() => {
+                        onStyleChange ? onStyleChange(style.id) : setSettings(prev => ({ ...(prev || {}), appStyle: style.id }));
+                      }}
+                      className={`w-full p-3 rounded-xl border-2 text-left transition-all ${active ? 'border-purple-400 bg-purple-50' : 'border-gray-200 bg-white'}`}
+                    >
+                      <div className="font-bold text-sm text-gray-900">{style.label}</div>
+                      <div className="text-xs text-gray-500">{style.desc}</div>
+                    </button>
+                  );
+                })}
+              </div>
+            </Card>
+
             <h3 className={`text-xs font-bold uppercase mb-2 px-1 ${settings.darkMode ? "text-gray-400" : "text-gray-400"}`}>Quick Toggles</h3>
 
             <Card className="mb-4">
@@ -3103,6 +3497,58 @@ const PlateCalculator = ({ targetWeight, barWeight, onClose }) => {
                   <div className={`w-5 h-5 bg-white rounded-full shadow transition-transform m-0.5 ${settings.showAllExercises ? 'translate-x-6' : 'translate-x-0'}`}></div>
                 </div>
               </button>
+
+              <div className="border-t border-gray-100 my-3"></div>
+
+              <button
+                onClick={() => setSettings({...settings, showLastTime: settings.showLastTime === false})}
+                className="w-full flex items-center justify-between py-2 border-b border-gray-100 pb-3 mb-3"
+              >
+                <div className="flex items-center gap-3">
+                  <Icon name="Clock" className="w-5 h-5 text-purple-600"/>
+                  <div className="text-left">
+                    <div className="font-semibold text-gray-900 text-sm">Show "Last time"</div>
+                    <div className="text-xs text-gray-500">Reference last logged set</div>
+                  </div>
+                </div>
+                <div className={`w-12 h-6 rounded-full transition-colors ${settings.showLastTime === false ? 'bg-gray-300' : 'bg-purple-600'}`}>
+                  <div className={`w-5 h-5 bg-white rounded-full shadow transition-transform m-0.5 ${settings.showLastTime === false ? 'translate-x-0' : 'translate-x-6'}`}></div>
+                </div>
+              </button>
+
+              <button
+                onClick={() => setSettings({...settings, showDeltas: settings.showDeltas === false})}
+                className="w-full flex items-center justify-between py-2 border-b border-gray-100 pb-3 mb-3"
+              >
+                <div className="flex items-center gap-3">
+                  <Icon name="TrendingUp" className="w-5 h-5 text-purple-600"/>
+                  <div className="text-left">
+                    <div className="font-semibold text-gray-900 text-sm">Show deltas</div>
+                    <div className="text-xs text-gray-500">Tiny changes near the logger</div>
+                  </div>
+                </div>
+                <div className={`w-12 h-6 rounded-full transition-colors ${settings.showDeltas === false ? 'bg-gray-300' : 'bg-purple-600'}`}>
+                  <div className={`w-5 h-5 bg-white rounded-full shadow transition-transform m-0.5 ${settings.showDeltas === false ? 'translate-x-0' : 'translate-x-6'}`}></div>
+                </div>
+              </button>
+
+              {currentStyle === APP_STYLES.new.id && (
+                <button
+                  onClick={() => setSettings({...settings, showTips: settings.showTips === false})}
+                  className="w-full flex items-center justify-between py-2"
+                >
+                  <div className="flex items-center gap-3">
+                    <Icon name="Info" className="w-5 h-5 text-purple-600"/>
+                    <div className="text-left">
+                      <div className="font-semibold text-gray-900 text-sm">Show tips</div>
+                      <div className="text-xs text-gray-500">Reassurance + glossary</div>
+                    </div>
+                  </div>
+                  <div className={`w-12 h-6 rounded-full transition-colors ${settings.showTips === false ? 'bg-gray-300' : 'bg-purple-600'}`}>
+                    <div className={`w-5 h-5 bg-white rounded-full shadow transition-transform m-0.5 ${settings.showTips === false ? 'translate-x-0' : 'translate-x-6'}`}></div>
+                  </div>
+                </button>
+              )}
             </Card>
 
             <Card className="mb-4">
@@ -3396,20 +3842,17 @@ const PlateCalculator = ({ targetWeight, barWeight, onClose }) => {
         onboarded: false
       });
 
-      const [settings, setSettings] = useState({ showSuggestions: true, darkMode: false, showAllExercises: false, pinnedExercises: [], workoutViewMode: 'all', suggestedWorkoutCollapsed: true });
+      const [settings, setSettings] = useState(() => ({ ...DEFAULT_SETTINGS }));
       const [history, setHistory] = useState({});
       const [cardioHistory, setCardioHistory] = useState({});
       const [tab, setTab] = useState('home');
       const [activeEquipment, setActiveEquipment] = useState(null);
       const [activeCardio, setActiveCardio] = useState(null);
-      const [view, setView] = useState('intro');
+      const [view, setView] = useState('style');
       const [showAnalytics, setShowAnalytics] = useState(false);
 
-      const [appState, setAppState] = useState({
-        lastWorkoutType: null,
-        lastWorkoutDayKey: null,
-        restDays: []
-      });
+      const [appState, setAppState] = useState(() => ({ ...DEFAULT_APP_STATE }));
+      const [styleOnboarded, setStyleOnboarded] = useState(false);
 
       const [pinnedExercises, setPinnedExercises] = useState([]);
       const [recentExercises, setRecentExercises] = useState([]);
@@ -3418,13 +3861,19 @@ const PlateCalculator = ({ targetWeight, barWeight, onClose }) => {
       const [lastExerciseStats, setLastExerciseStats] = useState({});
       const [generatedWorkout, setGeneratedWorkout] = useState(null);
       const [quoteIndex, setQuoteIndex] = useState(() => Math.floor(Math.random() * motivationalQuotes.length));
+      const [reassuranceIndex, setReassuranceIndex] = useState(() => Math.floor(Math.random() * REASSURANCE_LINES.length));
 
       useEffect(() => {
         const savedV2 = storage.get('ps_v2_profile', null);
-        const savedSettings = storage.get('ps_v2_settings', { showSuggestions: true, showAllExercises: false, pinnedExercises: [], workoutViewMode: 'all', suggestedWorkoutCollapsed: true });
+        const rawSettings = storage.get('ps_v2_settings', DEFAULT_SETTINGS);
+        const savedStyle = storage.get(APP_STYLE_KEY, rawSettings.appStyle || APP_STYLES.just.id);
+        const savedSettings = { ...DEFAULT_SETTINGS, ...rawSettings, appStyle: savedStyle };
         const savedHistory = storage.get('ps_v2_history', {});
         const savedCardio = storage.get('ps_v2_cardio', {});
-        const savedState = storage.get('ps_v2_state', { lastWorkoutType: null, lastWorkoutDayKey: null, restDays: [] });
+        const savedState = { ...DEFAULT_APP_STATE, ...storage.get('ps_v2_state', DEFAULT_APP_STATE) };
+        let savedV1 = null;
+        const storedFlag = storage.get(STYLE_ONBOARD_KEY, null);
+        let styleDone = storedFlag;
         
         if (savedV2) {
           const migratedProfile = {
@@ -3438,9 +3887,8 @@ const PlateCalculator = ({ targetWeight, barWeight, onClose }) => {
           if (!savedV2.gymType || !savedV2.barWeight || savedV2.activityLevel === 'Moderately Active' || savedV2.goal === 'recomp') {
             storage.set('ps_v2_profile', migratedProfile);
           }
-          if (savedV2.onboarded) setView('app');
         } else {
-          const savedV1 = storage.get('ps_profile', null);
+          savedV1 = storage.get('ps_profile', null);
           if (savedV1 && savedV1.onboarded) {
             const migrated = {
               ...savedV1,
@@ -3450,15 +3898,21 @@ const PlateCalculator = ({ targetWeight, barWeight, onClose }) => {
               goal: savedV1.goal === 'recomp' ? null : savedV1.goal
             };
             setProfile(migrated);
-            setView('app');
             storage.set('ps_v2_profile', migrated);
           }
         }
+
+        if (styleDone === null) {
+          styleDone = Boolean(savedV2 || savedV1);
+        }
+        styleDone = Boolean(styleDone);
         
         setSettings(savedSettings);
         setHistory(savedHistory);
         setCardioHistory(savedCardio);
         setAppState(savedState);
+        setStyleOnboarded(styleDone);
+        setView(styleDone ? 'app' : 'style');
 
         const savedMeta = storage.get(STORAGE_KEY, null);
         const baseMeta = {
@@ -3492,10 +3946,15 @@ const PlateCalculator = ({ targetWeight, barWeight, onClose }) => {
       }, []);
 
       useEffect(() => { if(loaded) storage.set('ps_v2_profile', profile); }, [profile, loaded]);
-      useEffect(() => { if(loaded) storage.set('ps_v2_settings', settings); }, [settings, loaded]);
+      useEffect(() => {
+        if(!loaded) return;
+        storage.set('ps_v2_settings', settings);
+        storage.set(APP_STYLE_KEY, settings.appStyle || APP_STYLES.just.id);
+      }, [settings, loaded]);
       useEffect(() => { if(loaded) storage.set('ps_v2_history', history); }, [history, loaded]);
       useEffect(() => { if(loaded) storage.set('ps_v2_cardio', cardioHistory); }, [cardioHistory, loaded]);
       useEffect(() => { if(loaded) storage.set('ps_v2_state', appState); }, [appState, loaded]);
+      useEffect(() => { if(loaded) storage.set(STYLE_ONBOARD_KEY, styleOnboarded); }, [styleOnboarded, loaded]);
       useEffect(() => {
         if (!loaded) return;
         storage.set(STORAGE_KEY, {
@@ -3534,6 +3993,41 @@ const PlateCalculator = ({ targetWeight, barWeight, onClose }) => {
         }
       }, [settings.darkMode]);
 
+      useEffect(() => {
+        if (!loaded) return;
+        const active = appState?.activeSession;
+        const expired = active && (Date.now() - (active.lastActivity || 0) > SESSION_TIMEOUT_MS);
+        if (expired) {
+          setAppState(prev => ({ ...(prev || {}), activeSession: null }));
+          setActiveEquipment(null);
+        } else if (active?.equipId && !activeEquipment) {
+          setActiveEquipment(active.equipId);
+        }
+      }, [loaded, appState?.activeSession]);
+
+      useEffect(() => {
+        if (!loaded) return;
+        const timer = setInterval(() => {
+          setAppState(prev => {
+            const active = prev?.activeSession;
+            if (active && (Date.now() - (active.lastActivity || 0) > SESSION_TIMEOUT_MS)) {
+              setActiveEquipment(null);
+              return { ...(prev || {}), activeSession: null };
+            }
+            return prev;
+          });
+        }, 60000);
+        return () => clearInterval(timer);
+      }, [loaded]);
+
+      const currentStyle = settings.appStyle || APP_STYLES.just.id;
+      const weeklySummaryLine = useMemo(() => computeWeeklySummaryLine(dayEntries), [dayEntries]);
+      const todayKey = toDayKey(new Date());
+      const lastWorkoutDate = useMemo(() => getLastWorkoutDate(dayEntries), [dayEntries]);
+      const showWeeklySummary = currentStyle === APP_STYLES.progress.id && weeklySummaryLine && settings.weeklySummarySeenWeek !== getWeekKey(new Date());
+      const showWelcomeBack = currentStyle === APP_STYLES.new.id && lastWorkoutDate && ((new Date() - lastWorkoutDate) / 86400000 >= 5) && settings.welcomeShownDay !== todayKey;
+      const reassuranceLine = currentStyle === APP_STYLES.new.id && settings.showTips !== false ? REASSURANCE_LINES[reassuranceIndex % REASSURANCE_LINES.length] : null;
+
       const todayWorkoutType = useMemo(() => getTodaysWorkoutType(history, appState), [history, appState]);
 
       const strengthScoreObj = useMemo(() => {
@@ -3543,7 +4037,12 @@ const PlateCalculator = ({ targetWeight, barWeight, onClose }) => {
 
       const streakObj = useMemo(() => computeStreak(history, cardioHistory, appState?.restDays || [], dayEntries), [history, cardioHistory, appState?.restDays, dayEntries]);
 
-      const achievements = useMemo(() => computeAchievements({ history, cardioHistory, strengthScoreObj, streakObj }), [history, cardioHistory, strengthScoreObj, streakObj]);
+      const recentSessions = useMemo(() => flattenSessions(history, cardioHistory), [history, cardioHistory]);
+      const trendText = useMemo(() => {
+        if (currentStyle !== APP_STYLES.progress.id) return null;
+        const strengthSessions = recentSessions.filter(s => s.type === 'strength');
+        return detectRecentTrend(strengthSessions);
+      }, [currentStyle, recentSessions]);
 
       const recordDayEntry = (dayKey, type = 'workout', extras = {}) => {
         setDayEntries(prev => {
@@ -3566,7 +4065,6 @@ const PlateCalculator = ({ targetWeight, barWeight, onClose }) => {
         }
       };
 
-      const todayKey = toDayKey(new Date());
       const hasWorkoutToday = dayEntries?.[todayKey]?.type === 'workout';
       const restDayLogged = dayEntries?.[todayKey]?.type === 'rest';
 
@@ -3649,6 +4147,7 @@ const PlateCalculator = ({ targetWeight, barWeight, onClose }) => {
 
       const handleSaveSession = (id, session) => {
         const sessionDay = toDayKey(new Date(session.date));
+        const now = Date.now();
         setHistory(prev => {
           const prevSessions = prev[id] || [];
           const existingIdx = prevSessions.findIndex(s => toDayKey(new Date(s.date)) === sessionDay);
@@ -3661,7 +4160,8 @@ const PlateCalculator = ({ targetWeight, barWeight, onClose }) => {
         setAppState(prev => ({
           ...prev,
           lastWorkoutType: todayWorkoutType,
-          lastWorkoutDayKey: toDayKey(new Date())
+          lastWorkoutDayKey: toDayKey(new Date()),
+          activeSession: { startedAt: prev?.activeSession?.startedAt || now, lastActivity: now, equipId: id }
         }));
 
         // Unlock beginner mode after first workout
@@ -3679,6 +4179,7 @@ const PlateCalculator = ({ targetWeight, barWeight, onClose }) => {
       const handleSaveCardioSession = (type, session) => {
         const durationMinutes = session.duration || (session.timeSeconds ? Math.round(session.timeSeconds / 60) : null);
         const enriched = { ...session, duration: durationMinutes, type: 'cardio', cardioType: type, sets: [] };
+        const now = Date.now();
         setCardioHistory(prev => ({
           ...prev,
           [type]: [...(prev[type] || []), enriched]
@@ -3693,7 +4194,30 @@ const PlateCalculator = ({ targetWeight, barWeight, onClose }) => {
         if (profile.beginnerMode && !profile.beginnerUnlocked) {
           setProfile(prev => ({ ...prev, beginnerUnlocked: true }));
         }
+        setAppState(prev => ({
+          ...(prev || {}),
+          lastWorkoutType: todayWorkoutType,
+          lastWorkoutDayKey: dayKey,
+          activeSession: { startedAt: prev?.activeSession?.startedAt || now, lastActivity: now, equipId: `cardio_${type}` }
+        }));
         setActiveCardio(null);
+      };
+
+      const endActiveSession = () => {
+        setAppState(prev => ({ ...(prev || {}), activeSession: null }));
+        setActiveEquipment(null);
+      };
+
+      const enterApp = (profilePatch = {}) => {
+        setProfile(prev => ({
+          ...prev,
+          ...profilePatch,
+          onboarded: true,
+          activityLevel: prev.activityLevel || 'Moderately Active',
+          goal: prev.goal || 'recomp'
+        }));
+        setView('app');
+        setTab('home');
       };
 
       const handleReset = () => {
@@ -3704,9 +4228,9 @@ const PlateCalculator = ({ targetWeight, barWeight, onClose }) => {
             age: 0, 
             gender: 'Male', 
             experience: 'Beginner', 
-            activityLevel: 'Moderately Active', 
+            activityLevel: null, 
             avatar: '🦁', 
-            goal: 'recomp',
+            goal: null,
             gymType: '',
             barWeight: 45,
             onboarded: false,
@@ -3718,10 +4242,11 @@ const PlateCalculator = ({ targetWeight, barWeight, onClose }) => {
           setProfile(freshProfile);
           setHistory({});
           setCardioHistory({});
-          setView('intro');
+          setView('style');
           setTab('home');
-          setAppState({ lastWorkoutType: null, lastWorkoutDayKey: null, restDays: [] });
-          setSettings({ showSuggestions: true, darkMode: false, showAllExercises: false, pinnedExercises: [], workoutViewMode: 'all', suggestedWorkoutCollapsed: true });
+          setAppState({ ...DEFAULT_APP_STATE });
+          setStyleOnboarded(false);
+          setSettings({ ...DEFAULT_SETTINGS });
           setPinnedExercises([]);
           setRecentExercises([]);
           setExerciseUsageCounts({});
@@ -3731,21 +4256,43 @@ const PlateCalculator = ({ targetWeight, barWeight, onClose }) => {
           storage.set('ps_v2_profile', null);
           storage.set('ps_v2_history', {});
           storage.set('ps_v2_cardio', {});
-          storage.set('ps_v2_state', { lastWorkoutType: null, lastWorkoutDayKey: null, restDays: [] });
-          storage.set('ps_v2_settings', { showSuggestions: true, darkMode: false, showAllExercises: false, pinnedExercises: [], workoutViewMode: 'all', suggestedWorkoutCollapsed: true });
+          storage.set('ps_v2_state', { ...DEFAULT_APP_STATE });
+          storage.set('ps_v2_settings', { ...DEFAULT_SETTINGS });
+          storage.set(APP_STYLE_KEY, APP_STYLES.just.id);
+          storage.set(STYLE_ONBOARD_KEY, false);
           storage.set(STORAGE_KEY, { version: STORAGE_VERSION, pinnedExercises: [], recentExercises: [], exerciseUsageCounts: {}, dayEntries: {}, lastExerciseStats: {} });
         }
       };
 
       const completeOnboarding = () => {
-        setProfile(prev => ({
-          ...prev,
-          onboarded: true,
-          activityLevel: prev.activityLevel || 'Moderately Active',
-          goal: prev.goal || 'recomp'
-        }));
-        setView('app');
-        setTab('home');
+        enterApp();
+      };
+
+      const persistStyleChoice = (styleId) => {
+        const style = styleId || APP_STYLES.just.id;
+        setSettings(prev => ({ ...(prev || {}), appStyle: style }));
+        setStyleOnboarded(true);
+        storage.set(STYLE_ONBOARD_KEY, true);
+        storage.set(APP_STYLE_KEY, style);
+      };
+
+      const handleStyleSelect = (styleId) => {
+        persistStyleChoice(styleId);
+        enterApp();
+      };
+
+      const resetStyleOnboarding = () => {
+        setStyleOnboarded(false);
+        setView('style');
+        storage.set(STYLE_ONBOARD_KEY, false);
+      };
+
+      const markWeeklySummarySeen = () => {
+        setSettings(prev => ({ ...(prev || {}), weeklySummarySeenWeek: getWeekKey(new Date()) }));
+      };
+
+      const acknowledgeWelcome = () => {
+        setSettings(prev => ({ ...(prev || {}), welcomeShownDay: todayKey }));
       };
 
       const handleExportData = () => {
@@ -3824,8 +4371,9 @@ const PlateCalculator = ({ targetWeight, barWeight, onClose }) => {
                   storage.set('ps_v2_cardio', importedData.cardioHistory);
                 }
                 if (importedData.appState) {
-                  setAppState(importedData.appState);
-                  storage.set('ps_v2_state', importedData.appState);
+                  const mergedState = { ...DEFAULT_APP_STATE, ...importedData.appState };
+                  setAppState(mergedState);
+                  storage.set('ps_v2_state', mergedState);
                 }
                 if (importedData.meta) {
                   const meta = {
@@ -3873,6 +4421,8 @@ const PlateCalculator = ({ targetWeight, barWeight, onClose }) => {
 
       if (!loaded) return null;
 
+      if (!styleOnboarded) return <StyleOnboarding onSelect={handleStyleSelect} defaultStyle={settings.appStyle || APP_STYLES.just.id} />;
+
       if (view === 'intro') return <IntroScreen onComplete={() => setView('setup')} />;
       if (view === 'setup') return <ProfileSetup profile={profile} setProfile={setProfile} settings={settings} setSettings={setSettings} onComplete={completeOnboarding} />;
 
@@ -3912,6 +4462,14 @@ return (
                       onGenerate={triggerGenerator}
                       quoteIndex={quoteIndex}
                       onRefreshQuote={() => setQuoteIndex((prev) => (prev + 1) % motivationalQuotes.length)}
+                      appStyle={currentStyle}
+                      weeklySummary={showWeeklySummary ? weeklySummaryLine : null}
+                      onWeeklySeen={markWeeklySummarySeen}
+                      reassuranceLine={reassuranceLine}
+                      onReassuranceNext={() => setReassuranceIndex((prev) => (prev + 1) % REASSURANCE_LINES.length)}
+                      showWelcomeBack={showWelcomeBack}
+                      onDismissWelcome={acknowledgeWelcome}
+                      tipsEnabled={settings.showTips !== false}
                     />
                   )}
                   {tab === 'workout' && (
@@ -3933,6 +4491,12 @@ return (
                       onLogRestDay={handleLogRestDay}
                       restDayLogged={restDayLogged}
                       hasWorkoutToday={hasWorkoutToday}
+                      appStyle={currentStyle}
+                      activeSession={appState?.activeSession}
+                      onEndSession={endActiveSession}
+                      recentSessions={recentSessions}
+                      trendText={trendText}
+                      reassuranceLine={reassuranceLine}
                     />
                   )}
                   {tab === 'profile' && (
@@ -3948,6 +4512,8 @@ return (
                       workoutCount={Object.values(history || {}).reduce((sum, sessions) => sum + (sessions?.length || 0), 0)}
                       restDayCount={Object.values(dayEntries || {}).filter(d => d.type === 'rest').length}
                       onViewAnalytics={() => setShowAnalytics(true)}
+                      onStyleChange={persistStyleChoice}
+                      onResetOnboarding={resetStyleOnboarding}
                     />
                   )}
                 </>
@@ -3963,6 +4529,9 @@ return (
                 history={history[activeEquipment] || []}
                 onSave={handleSaveSession}
                 onClose={() => setActiveEquipment(null)}
+                settings={settings}
+                appStyle={currentStyle}
+                onEndSession={endActiveSession}
               />
             )}
 
