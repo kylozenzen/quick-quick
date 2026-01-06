@@ -114,6 +114,7 @@ const { useState, useEffect, useMemo, useRef } = React;
         Search: <g><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></g>,
         Star: <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" />,
         Droplet: <path d="M12 22a7 7 0 0 0 7-7c0-2-1-3.9-3-5.5s-3.5-4-4-6.5c-.5 2.5-2 4.9-4 6.5C6 11.1 5 13 5 15a7 7 0 0 0 7 7z" />,
+        RefreshCw: <g><path d="M21 12a9 9 0 0 1-9 9 9 9 0 0 1-9-9 9 9 0 0 1 9-9 9 9 0 0 1 8.7 6"/><path d="M21 3v6h-6"/></g>,
       };
       return (
         <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24"
@@ -814,7 +815,14 @@ const motivationalQuotes = [
       return `${y}-${m}-${d}`;
     };
 
-    const uniqueDayKeysFromHistory = (history, cardioHistory = {}, restDays = []) => {
+    const STORAGE_VERSION = 3;
+    const STORAGE_KEY = 'ps_v3_meta';
+
+    const uniqueDayKeysFromHistory = (history, cardioHistory = {}, restDays = [], dayEntries = null) => {
+      if (dayEntries && Object.keys(dayEntries).length > 0) {
+        return Object.keys(dayEntries).sort();
+      }
+
       const keys = new Set();
       // Add workout days
       Object.values(history || {}).forEach(arr => {
@@ -833,8 +841,8 @@ const motivationalQuotes = [
       return Array.from(keys).sort();
     };
 
-    const computeStreak = (history, cardioHistory = {}, restDays = []) => {
-      const days = uniqueDayKeysFromHistory(history, cardioHistory, restDays);
+    const computeStreak = (history, cardioHistory = {}, restDays = [], dayEntries = null) => {
+      const days = uniqueDayKeysFromHistory(history, cardioHistory, restDays, dayEntries);
       if (days.length === 0) return { current: 0, best: 0, lastDayKey: null, hasToday: false };
 
       let best = 1, run = 1;
@@ -861,6 +869,92 @@ const motivationalQuotes = [
       }
 
       return { current, best, lastDayKey: anchor, hasToday: anchor === todayKey };
+    };
+
+    const buildDayEntriesFromHistory = (history = {}, cardioHistory = {}, restDays = []) => {
+      const entries = {};
+      Object.values(history || {}).forEach(arr => {
+        (arr || []).forEach(s => {
+          if (!s?.date) return;
+          const key = toDayKey(new Date(s.date));
+          entries[key] = entries[key] || { type: 'workout', date: key, exercises: [] };
+        });
+      });
+      Object.values(cardioHistory || {}).forEach(arr => {
+        (arr || []).forEach(s => {
+          if (!s?.date) return;
+          const key = toDayKey(new Date(s.date));
+          entries[key] = entries[key] || { type: 'workout', date: key, exercises: [] };
+        });
+      });
+      (restDays || []).forEach(d => {
+        entries[d] = entries[d] || { type: 'rest', date: d, exercises: [] };
+      });
+      return entries;
+    };
+
+    const deriveRecentExercises = (history = {}, limit = 12) => {
+      const flat = [];
+      Object.entries(history || {}).forEach(([id, sessions]) => {
+        (sessions || []).forEach(s => {
+          if (s?.date) flat.push({ id, date: s.date });
+        });
+      });
+      flat.sort((a, b) => new Date(b.date) - new Date(a.date));
+      const seen = new Set();
+      const result = [];
+      for (const item of flat) {
+        if (seen.has(item.id)) continue;
+        seen.add(item.id);
+        result.push(item.id);
+        if (result.length >= limit) break;
+      }
+      return result;
+    };
+
+    const deriveUsageCountsFromHistory = (history = {}) => {
+      const counts = {};
+      Object.entries(history || {}).forEach(([id, sessions]) => {
+        (sessions || []).forEach(s => {
+          const increment = Math.max(1, (s?.sets || []).length);
+          counts[id] = (counts[id] || 0) + increment;
+        });
+      });
+      return counts;
+    };
+
+    const normalizeSearch = (value = '') => value.toLowerCase().replace(/[^a-z0-9\s]/g, '').trim();
+    const SEARCH_ALIASES = {
+      rdl: 'romanian deadlift',
+      ohp: 'overhead press',
+      bp: 'bench press',
+      'lat pulldown': 'lat pulldown lat pull-down lat pull down',
+      dl: 'deadlift',
+      squat: 'squat back squat',
+      row: 'row bent-over row',
+    };
+
+    const fuzzyMatchExercises = (query, pool) => {
+      const normalized = normalizeSearch(query);
+      if (!normalized) return pool.slice(0, 20);
+
+      const scores = pool.map((id) => {
+        const eq = EQUIPMENT_DB[id];
+        const haystack = [
+          eq?.name || '',
+          eq?.target || '',
+          (eq?.tags || []).join(' '),
+          Object.entries(SEARCH_ALIASES)
+            .filter(([alias]) => normalized.includes(alias))
+            .map(([, str]) => str)
+            .join(' ')
+        ].join(' ').toLowerCase();
+
+        const baseScore = haystack.startsWith(normalized) ? 2 : (haystack.includes(normalized) ? 1 : 0);
+        return { id, score: baseScore };
+      }).filter(item => item.score > 0);
+
+      return scores.sort((a, b) => b.score - a.score).map(s => s.id).slice(0, 20);
     };
 
     const calculatePlateLoading = (targetWeight, barWeight = 45) => {
@@ -921,7 +1015,6 @@ const motivationalQuotes = [
           {[
             { id: 'home', label: 'Home', icon: 'Home' },
             { id: 'workout', label: 'Workout', icon: 'Dumbbell' },
-            { id: 'progress', label: 'Progress', icon: 'TrendingUp' },
             { id: 'profile', label: 'Profile', icon: 'User' }
           ].map(t => (
             <button 
@@ -1338,1074 +1431,343 @@ const motivationalQuotes = [
     };
 
     // ========== HOME SCREEN ==========
-    const Home = ({ profile, setProfile, history, cardioHistory, appState, setAppState, onGoWorkout, onStartSuggestedWorkout, onGoProfile, onOpenCardio, streakObj, achievements, todayWorkoutType, settings, setSettings }) => {
-      const [showAchievements, setShowAchievements] = useState(false);
-      const [workoutCollapsed, setWorkoutCollapsed] = useState(true);
-      const [selectedPresetId, setSelectedPresetId] = useState(null);
+    
+const Home = ({ profile, streakObj, onStartWorkout, onGenerate, quoteIndex, onRefreshQuote }) => {
+  const quote = motivationalQuotes[quoteIndex % motivationalQuotes.length];
 
-      useEffect(() => {
-        if (typeof settings?.suggestedWorkoutCollapsed === 'boolean') {
-          setWorkoutCollapsed(settings.suggestedWorkoutCollapsed);
-        } else {
-          setSettings?.(prev => ({ ...(prev || {}), suggestedWorkoutCollapsed: true }));
-        }
-      }, [settings?.suggestedWorkoutCollapsed, setSettings]);
-      
-      const todayKey = toDayKey(new Date());
-      const doneToday = useMemo(() => {
-        const days = uniqueDayKeysFromHistory(history, cardioHistory, appState?.restDays);
-        return days.includes(todayKey);
-      }, [history, cardioHistory, appState?.restDays]);
+  return (
+    <div className="flex flex-col h-full bg-gray-50">
+      <div className="bg-white border-b border-gray-100 sticky top-0 z-20" style={{ paddingTop: 'env(safe-area-inset-top)' }}>
+        <div className="p-4 py-5 flex items-center justify-between">
+          <div>
+            <div className="text-xs text-gray-400 font-bold uppercase tracking-wide">Planet Strength</div>
+            <h1 className="text-2xl font-black text-gray-900">Hi, {profile.username || 'Athlete'}</h1>
+          </div>
+          <div className="w-12 h-12 rounded-2xl bg-purple-50 flex items-center justify-center text-2xl">
+            {profile.avatar}
+          </div>
+        </div>
+      </div>
 
-      const isRestDayToday = appState?.restDays?.includes(todayKey);
+      <div className="flex-1 overflow-y-auto p-4 pb-24 space-y-4">
+        <Card className="bg-gradient-to-br from-purple-50 to-indigo-50 border-purple-200 relative">
+          <button
+            onClick={onRefreshQuote}
+            className="absolute top-3 right-3 p-2 rounded-full bg-white/70 text-purple-700 hover:bg-white"
+            aria-label="Refresh quote"
+          >
+            <Icon name="RefreshCw" className="w-4 h-4" />
+          </button>
+          <div className="text-sm font-medium italic leading-relaxed text-purple-900 dark-mode-quote-text">
+            “{quote.quote}”
+          </div>
+          <div className="text-xs font-semibold mt-2 text-purple-600 dark-mode-quote-author">
+            — {quote.author}
+          </div>
+        </Card>
 
-      const allSessions = useMemo(() => {
-        const combined = [];
-        const seen = new Set();
-        Object.entries(history || {}).forEach(([equipId, sessions]) => {
-          sessions.forEach(s => {
-            const cardioType = s.type === 'cardio' ? (s.cardioType || equipId.replace('cardio_', '')) : null;
-            const id = s.type === 'cardio'
-              ? `${s.date}-${cardioType}-cardio`
-              : `${s.date}-${equipId}-strength`;
-            if (seen.has(id)) return;
-            seen.add(id);
-            combined.push({ ...s, equipId, cardioType: cardioType || s.cardioType, type: s.type || 'strength' });
-          });
-        });
-        Object.entries(cardioHistory || {}).forEach(([cardioType, sessions]) => {
-          sessions.forEach(s => {
-            const id = `${s.date}-${s.cardioType || cardioType}-cardio`;
-            if (seen.has(id)) return;
-            seen.add(id);
-            combined.push({ ...s, cardioType: s.cardioType || cardioType, type: 'cardio' });
-          });
-        });
-        return combined;
-      }, [history, cardioHistory]);
-
-      const lastWorkoutInfo = useMemo(() => {
-        if (allSessions.length === 0) return null;
-        const sorted = [...allSessions].sort((a, b) => new Date(b.date) - new Date(a.date));
-        const last = sorted[0];
-        const date = new Date(last.date);
-        const daysAgo = Math.floor((new Date() - date) / 86400000);
-        const label = last.type === 'cardio'
-          ? (CARDIO_TYPES[last.cardioType]?.name || 'Cardio')
-          : (EQUIPMENT_DB[last.equipId]?.name || 'Unknown');
-        
-        return {
-          equipment: label,
-          daysAgo,
-          date: date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
-        };
-      }, [allSessions]);
-
-      const gymType = GYM_TYPES[profile.gymType];
-      const availableTypes = [];
-      if (gymType?.machines) availableTypes.push('machines');
-      if (gymType?.dumbbells?.available) availableTypes.push('dumbbells');
-      if (gymType?.barbells?.available) availableTypes.push('barbells');
-
-      const getSuggestedExercises = () => {
-        const plan = WORKOUT_PLANS[todayWorkoutType];
-        const suggested = [];
-        
-        availableTypes.forEach(type => {
-          const exercises = plan[type] || [];
-          suggested.push(...exercises);
-        });
-        
-        return suggested.slice(0, 4);
-      };
-
-      const suggestedExercises = getSuggestedExercises();
-      const pinnedIds = settings?.pinnedExercises || [];
-      const shouldShowPinnedOnHome = pinnedIds.length > 0 && pinnedIds.length <= 6;
-      const homeWorkoutIds = shouldShowPinnedOnHome ? pinnedIds : suggestedExercises;
-      const homeWorkoutTitle = shouldShowPinnedOnHome ? "Pinned Workout" : `${todayWorkoutType} Day`;
-      const homeWorkoutCount = shouldShowPinnedOnHome ? pinnedIds.length : suggestedExercises.length;
-      const starterIds = (pinnedIds || []).slice(0, 3);
-      const presetWorkouts = useMemo(() => {
-        const buildPlan = (type) => {
-          const plan = WORKOUT_PLANS[type] || {};
-          const ids = [];
-          availableTypes.forEach(t => ids.push(...(plan[t] || [])));
-          return ids;
-        };
-        const list = [];
-        if (shouldShowPinnedOnHome) {
-          list.push({ id: 'pinned', title: 'Pinned Workout', tag: 'Custom', exercises: homeWorkoutIds });
-        }
-        ['Push','Pull','Legs'].forEach(type => {
-          const ids = buildPlan(type);
-          if (ids.length > 0) list.push({ id: type, title: `${type} Day`, tag: type, exercises: ids });
-        });
-        if (list.length === 0 && homeWorkoutIds.length > 0) {
-          list.push({ id: todayWorkoutType, title: homeWorkoutTitle, tag: todayWorkoutType, exercises: homeWorkoutIds });
-        }
-        return list;
-      }, [availableTypes, homeWorkoutIds, shouldShowPinnedOnHome, homeWorkoutTitle, todayWorkoutType]);
-
-      useEffect(() => {
-        if (presetWorkouts.length > 0 && (!selectedPresetId || !presetWorkouts.some(p => p.id === selectedPresetId))) {
-          setSelectedPresetId(presetWorkouts[0].id);
-        }
-      }, [presetWorkouts, selectedPresetId]);
-
-      const selectedPreset = useMemo(() => presetWorkouts.find(p => p.id === selectedPresetId) || presetWorkouts[0], [presetWorkouts, selectedPresetId]);
-
-      const unlockedCount = achievements.filter(a => a.unlocked).length;
-
-      const handleLogRestDay = () => {
-        setAppState(prev => ({
-          ...prev,
-          restDays: [...(prev.restDays || []), todayKey]
-        }));
-      };
-
-      const handleStartPreset = (preset) => {
-        if (!preset) return;
-        if (preset.id === 'pinned') {
-          onGoWorkout();
-          return;
-        }
-        setAppState(prev => ({
-          ...prev,
-          lastWorkoutType: preset.id,
-          lastWorkoutDayKey: toDayKey(new Date())
-        }));
-        onStartSuggestedWorkout();
-      };
-
-      return (
-        <div className="flex flex-col h-full bg-gray-50">
-          <div className="bg-white border-b border-gray-100 sticky top-0 z-20" style={{ paddingTop: 'env(safe-area-inset-top)' }}>
-            <div className="p-4 py-5 flex items-center justify-between">
-              <div>
-                <div className="text-xs text-gray-400 font-bold uppercase tracking-wide">Planet Strength</div>
-                <h1 className="text-2xl font-black text-gray-900">Hey, {profile.username}</h1>
-              </div>
-              <button 
-                onClick={onGoProfile}
-                className="w-12 h-12 rounded-2xl bg-purple-50 flex items-center justify-center text-2xl active:scale-95 transition-transform"
-              >
-                {profile.avatar}
-              </button>
+        <Card className="flex items-center justify-between bg-gradient-to-r from-orange-50 to-yellow-50 border-orange-200">
+          <div className="flex items-center gap-3">
+            <div className="text-3xl">🔥</div>
+            <div>
+              <div className="text-sm font-semibold text-gray-600 uppercase">Streak</div>
+              <div className="text-2xl font-black text-orange-600">{streakObj.current} days</div>
+              <div className="text-xs text-gray-500">Best: {streakObj.best} days</div>
             </div>
           </div>
+          <button
+            onClick={onStartWorkout}
+            className="px-4 py-2 rounded-xl bg-purple-600 text-white font-bold shadow active:scale-95 transition-all"
+          >
+            Start
+          </button>
+        </Card>
 
-          <div className="flex-1 overflow-y-auto p-4 pb-24 space-y-4">
-            <Card className="bg-gradient-to-br from-purple-50 to-indigo-50 border-purple-200">
-              <div className="text-sm font-medium italic leading-relaxed text-purple-900 dark-mode-quote-text">
-                "{motivationalQuotes[Math.floor((new Date().getDate() + new Date().getMonth()) % motivationalQuotes.length)].quote}"
-              </div>
-              <div className="text-xs font-semibold mt-2 text-purple-600 dark-mode-quote-author">
-                — {motivationalQuotes[Math.floor((new Date().getDate() + new Date().getMonth()) % motivationalQuotes.length)].author}
-              </div>
-            </Card>
+        <button
+          onClick={onStartWorkout}
+          className="w-full py-4 rounded-2xl bg-purple-600 text-white font-bold text-lg shadow-lg active:scale-95 transition-all"
+        >
+          Start Workout
+        </button>
 
-            {/* Streak Card with Rest Day Button */}
-            {streakObj.current > 0 && (
-              <Card className="bg-gradient-to-br from-orange-50 to-yellow-50 border-orange-200">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-3">
-                    <div className="text-3xl">🔥</div>
-                    <div>
-                      <div className="text-2xl font-black text-orange-600">{streakObj.current} Day Streak</div>
-                      <div className="text-xs text-gray-500">Best: {streakObj.best} days</div>
-                    </div>
-                  </div>
-                  {!doneToday && !isRestDayToday && (
-                    <button
-                      onClick={handleLogRestDay}
-                      className="px-4 py-2 bg-white border border-orange-200 rounded-xl text-sm font-semibold text-orange-600 active:scale-95 transition-all"
-                    >
-                      😴 Rest Day
-                    </button>
-                  )}
-                </div>
-                {isRestDayToday && (
-                  <div className="mt-3 pt-3 border-t border-orange-200 text-center text-sm text-orange-600 font-medium">
-                    ✓ Rest day logged — streak protected!
-                  </div>
-                )}
-              </Card>
-            )}
-
-            {/* Rest Day Button for users without streak */}
-            {streakObj.current === 0 && !doneToday && !isRestDayToday && (
+        <Card className="space-y-3">
+          <div className="flex items-center justify-between">
+            <div>
+              <div className="text-xs font-bold text-gray-400 uppercase">Quick Generator</div>
+              <div className="text-base font-black text-gray-900">Pick a focus</div>
+            </div>
+            <span className="text-xl">⚡️</span>
+          </div>
+          <div className="flex gap-2 overflow-x-auto no-scrollbar pb-1">
+            {[
+              { label: 'Get a Leg Workout', id: 'legs' },
+              { label: 'Get a Push Workout', id: 'push' },
+              { label: 'Get a Pull Workout', id: 'pull' },
+              { label: 'Get a Full Body Workout', id: 'full' },
+              { label: 'Surprise Me', id: 'surprise' },
+            ].map(pill => (
               <button
-                onClick={handleLogRestDay}
-                className="w-full py-3 bg-gray-100 text-gray-600 rounded-xl font-semibold border border-gray-200 active:scale-95 transition-all"
+                key={pill.id}
+                onClick={() => onGenerate(pill.id)}
+                className="whitespace-nowrap px-4 py-2 rounded-full bg-gray-100 text-sm font-semibold text-gray-700 hover:bg-purple-50 hover:text-purple-700 border border-gray-200 active:scale-95 transition-all"
               >
-                😴 Log Rest Day
+                {pill.label}
               </button>
-            )}
-
-            {!profile.gymType && (
-              <Card className="bg-gradient-to-br from-orange-50 to-red-50 border-2 border-orange-300">
-                <div className="flex items-start gap-3 mb-3">
-                  <div className="text-3xl">⚠️</div>
-                  <div>
-                    <h3 className="text-base font-bold text-orange-900 mb-1">Select Your Gym</h3>
-                    <p className="text-sm text-orange-700 leading-relaxed">
-                      Choose your gym type so we can show you exercises that match your equipment.
-                    </p>
-                  </div>
-                </div>
-                
-                <div className="space-y-2">
-                  {Object.entries(GYM_TYPES).map(([key, gym]) => (
-                    <button
-                      key={key}
-                      onClick={() => setProfile({...profile, gymType: key})}
-                      className="w-full p-3 rounded-xl border-2 border-orange-200 bg-white hover:border-orange-400 transition-all flex items-center gap-3"
-                    >
-                      <div className="text-2xl">{gym.emoji}</div>
-                      <div className="flex-1 text-left">
-                        <div className="font-bold text-sm text-gray-900">{gym.label}</div>
-                        {gym.desc && <div className="text-xs text-gray-500">{gym.desc}</div>}
-                      </div>
-                      <Icon name="ChevronRight" className="w-4 h-4 text-gray-400" />
-                    </button>
-                  ))}
-                </div>
-              </Card>
-            )}
-
-            {(() => {
-              const sevenDaysAgo = new Date();
-              sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
-              
-              const recentWorkouts = (allSessions || []).filter(w => new Date(w.date) >= sevenDaysAgo)
-                .sort((a, b) => new Date(b.date) - new Date(a.date));
-              
-              const workoutDays = [...new Set(recentWorkouts.map(w => 
-                new Date(w.date).toLocaleDateString()
-              ))].length;
-              
-              if (recentWorkouts.length === 0) return null;
-              
-              return (
-                <Card>
-                  <div className="flex items-center justify-between mb-3">
-                    <div>
-                      <div className="text-xs text-gray-400 font-bold uppercase">Last 7 Days</div>
-                      <div className="text-2xl font-black text-gray-900">{workoutDays} {workoutDays === 1 ? 'Day' : 'Days'}</div>
-                      <div className="text-xs text-gray-500">{recentWorkouts.length} total sessions</div>
-                    </div>
-                    <div className="text-right">
-                      <div className="text-xs text-gray-400 font-semibold">Activities Hit</div>
-                      <div className="text-2xl font-black text-purple-600">
-                        {[...new Set(recentWorkouts.map(w => w.type === 'cardio' ? (CARDIO_TYPES[w.cardioType]?.name || 'Cardio') : (EQUIPMENT_DB[w.equipId]?.name || '')))].filter(Boolean).length}
-                      </div>
-                    </div>
-                  </div>
-                  <div className="grid grid-cols-7 gap-1 mt-3">
-                    {[...Array(7)].map((_, i) => {
-                      const day = new Date();
-                      day.setDate(day.getDate() - (6 - i));
-                      const dayStr = day.toLocaleDateString();
-                      const hasWorkout = recentWorkouts.some(w => 
-                        new Date(w.date).toLocaleDateString() === dayStr
-                      );
-                      return (
-                        <div key={i} className="text-center">
-                          <div className="text-xs text-gray-400 font-semibold mb-1">
-                            {day.toLocaleDateString('en-US', { weekday: 'narrow' })}
-                          </div>
-                          <div className={`h-8 rounded-lg ${
-                            hasWorkout ? 'bg-purple-600' : 'bg-gray-200'
-                          }`}></div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                </Card>
-              );
-            })()}
-
-            {/* Today's Workout / Starters */}
-            {profile.beginnerMode && !profile.beginnerUnlocked ? (
-              <Card>
-                <div className="text-xs text-gray-400 font-bold uppercase mb-2">Starter Exercises</div>
-                <div className="text-lg font-black text-gray-900 mb-1">Your first 3</div>
-                <div className="text-xs text-gray-500 mb-3">Log 1 strength or cardio session to unlock everything.</div>
-                <div className="grid grid-cols-3 gap-2 mb-3">
-                  {starterIds.map(id => {
-                    const eq = EQUIPMENT_DB[id];
-                    return (
-                      <div key={id} className="p-3 bg-gray-50 rounded-xl border border-gray-100 text-center shadow-sm">
-                        <div className="text-2xl mb-2">
-                          {eq.type === 'machine' ? '⚙️' : eq.type === 'dumbbell' ? '🏋️' : '🏋️‍♂️'}
-                        </div>
-                        <div className="font-bold text-gray-900 text-xs leading-tight mb-1">{eq.name}</div>
-                        <div className="text-xs text-gray-500">{eq.target}</div>
-                      </div>
-                    );
-                  })}
-                </div>
-                <button 
-                  onClick={onGoWorkout}
-                  className="w-full bg-purple-600 text-white font-semibold py-3 rounded-xl"
-                >
-                  Start Workout
-                </button>
-              </Card>
-            ) : (
-              <Card>
-                <button 
-                  onClick={() => {
-                    const next = !workoutCollapsed;
-                    setWorkoutCollapsed(next);
-                    setSettings?.(prev => ({ ...(prev || {}), suggestedWorkoutCollapsed: next }));
-                  }}
-                  className="w-full flex items-center justify-between"
-                >
-                  <div className="text-left">
-                    <div className="text-xs text-gray-400 font-bold uppercase">Today's Workout</div>
-                    <div className="text-lg font-black text-gray-900">{selectedPreset?.title || homeWorkoutTitle}</div>
-                    <div className="text-xs text-gray-500">{selectedPreset?.exercises?.length || homeWorkoutCount} exercises ready</div>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <Icon name="ChevronDown" className={`w-5 h-5 text-gray-500 transition-transform ${workoutCollapsed ? '' : 'rotate-180'}`} />
-                  </div>
-                </button>
-
-                {!workoutCollapsed && (
-                  <div className="mt-3 animate-expand space-y-3">
-                    <div className="flex overflow-x-auto gap-3 pb-2 snap-x snap-mandatory no-scrollbar">
-                      {presetWorkouts.map(preset => (
-                        <div
-                          key={preset.id}
-                          onClick={() => setSelectedPresetId(preset.id)}
-                          className={`min-w-[78%] snap-center p-4 rounded-2xl border-2 transition-all active:scale-[0.99] shadow-sm ${
-                            selectedPresetId === preset.id ? 'border-purple-300 bg-purple-50' : 'border-gray-100 bg-gray-50'
-                          }`}
-                        >
-                          <div className="flex items-center justify-between mb-2">
-                            <div>
-                              <div className="text-xs font-bold text-gray-400 uppercase">Preset</div>
-                              <div className="text-lg font-black text-gray-900">{preset.title}</div>
-                              <div className="text-[11px] text-gray-500">{preset.tag}</div>
-                            </div>
-                            <div className="px-3 py-1 rounded-full bg-white border border-gray-200 text-xs font-bold text-gray-700">
-                              {preset.exercises.length} moves
-                            </div>
-                          </div>
-                          <div className="flex flex-wrap gap-1 mb-3">
-                            {preset.exercises.slice(0, 4).map(id => (
-                              <span key={id} className="px-2 py-1 text-[11px] rounded-lg bg-white border border-gray-200 text-gray-700">
-                                {EQUIPMENT_DB[id]?.name?.split(' ')[0] || 'Move'}
-                              </span>
-                            ))}
-                            {preset.exercises.length > 4 && (
-                              <span className="px-2 py-1 text-[11px] rounded-lg bg-white border border-gray-200 text-gray-500">
-                                +{preset.exercises.length - 4} more
-                              </span>
-                            )}
-                          </div>
-                          <button
-                            onClick={(e) => { e.stopPropagation(); handleStartPreset(preset); }}
-                            className="w-full py-2 rounded-xl bg-purple-600 text-white font-bold active:scale-95"
-                          >
-                            Start
-                          </button>
-                        </div>
-                      ))}
-                    </div>
-
-                    {selectedPreset && (
-                      <div className="p-3 rounded-xl bg-gray-50 border border-gray-100">
-                        <div className="text-[10px] font-black uppercase text-gray-500 mb-1">Preview</div>
-                        <div className="text-sm font-semibold text-gray-900 mb-2">{selectedPreset.title}</div>
-                        <div className="flex flex-wrap gap-2">
-                          {selectedPreset.exercises.slice(0, 6).map(id => (
-                            <span key={id} className="px-3 py-1 bg-white border border-gray-200 rounded-lg text-xs font-bold text-gray-700">
-                              {EQUIPMENT_DB[id]?.name || 'Move'}
-                            </span>
-                          ))}
-                          {selectedPreset.exercises.length === 0 && (
-                            <span className="text-xs text-gray-500">No exercises available for this preset.</span>
-                          )}
-                        </div>
-                      </div>
-                    )}
-
-                    <button 
-                      onClick={onGoWorkout}
-                      className="w-full py-2 bg-gray-100 text-gray-700 rounded-xl font-medium text-sm border border-gray-200"
-                    >
-                      Browse All Exercises
-                    </button>
-                  </div>
-                )}
-              </Card>
-            )}
-
-            
-
-
-            
-<div className="text-center text-xs text-gray-400">
-              Tiny progress today is still progress. Keep showing up.
-            </div>
+            ))}
           </div>
-        </div>
-      );
-    };
-
-    // ========== CARDIO LOGGER ==========
-    const CardioLogger = ({ type, onSave, onClose }) => {
-      const cardio = CARDIO_TYPES[type];
-      const [mode, setMode] = useState('regular');
-      const [duration, setDuration] = useState('');
-      const [activity, setActivity] = useState(cardio.regularActivities[0].id);
-      const [distance, setDistance] = useState('');
-      const [distanceUnit, setDistanceUnit] = useState(type === 'swimming' ? 'yards' : 'miles');
-      const [hours, setHours] = useState('');
-      const [minutes, setMinutes] = useState('');
-      const [seconds, setSeconds] = useState('');
-      const [notes, setNotes] = useState('');
-
-      const calculatePace = () => {
-        if (!distance || distance <= 0) return null;
-        const totalSeconds = (Number(hours) || 0) * 3600 + (Number(minutes) || 0) * 60 + (Number(seconds) || 0);
-        if (totalSeconds <= 0) return null;
-        
-        if (type === 'swimming') {
-          const per100 = totalSeconds / (Number(distance) / 100);
-          const paceMin = Math.floor(per100 / 60);
-          const paceSec = Math.round(per100 % 60);
-          return `${paceMin}:${paceSec.toString().padStart(2, '0')}/100${distanceUnit === 'yards' ? 'y' : 'm'}`;
-        } else {
-          const perUnit = totalSeconds / Number(distance);
-          const paceMin = Math.floor(perUnit / 60);
-          const paceSec = Math.round(perUnit % 60);
-          return `${paceMin}:${paceSec.toString().padStart(2, '0')}/${distanceUnit === 'miles' ? 'mi' : 'km'}`;
-        }
-      };
-
-      const handleSave = () => {
-        const session = { date: new Date().toISOString(), mode, type: 'cardio', cardioType: type };
-        if (mode === 'regular') {
-          session.duration = Number(duration);
-          session.activity = activity;
-        } else {
-          session.distance = Number(distance);
-          session.distanceUnit = distanceUnit;
-          session.timeSeconds = (Number(hours) || 0) * 3600 + (Number(minutes) || 0) * 60 + (Number(seconds) || 0);
-          session.pace = calculatePace();
-          session.duration = Math.round((session.timeSeconds || 0) / 60);
-        }
-        if (notes) session.notes = notes;
-        onSave(type, session);
-      };
-
-      const canSave = mode === 'regular' ? duration && Number(duration) > 0 : distance && Number(distance) > 0;
-
-      return (
-        <div className="fixed inset-0 bg-black/60 flex items-end justify-center z-[100]" onClick={onClose}>
-          <div className="bg-white dark-mode-modal rounded-t-3xl w-full max-w-lg animate-slide-up" style={{ maxHeight: '90vh' }} onClick={e => e.stopPropagation()}>
-            <div className="p-6 pb-8 overflow-y-auto" style={{ maxHeight: '90vh' }}>
-              <div className="flex items-center justify-between mb-6">
-                <div className="flex items-center gap-3">
-                  <span className="text-3xl">{cardio.emoji}</span>
-                  <div>
-                    <h2 className="text-xl font-bold text-gray-900">{cardio.name}</h2>
-                    <p className="text-sm text-gray-500">Log your session</p>
-                  </div>
-                </div>
-                <button onClick={onClose} className="p-2 hover:bg-gray-100 rounded-full">
-                  <Icon name="X" className="w-5 h-5 text-gray-600" />
-                </button>
-              </div>
-
-              <div className="flex gap-2 mb-6">
-                <button
-                  onClick={() => setMode('regular')}
-                  className={`flex-1 py-3 rounded-xl font-semibold transition-all ${
-                    mode === 'regular' ? 'bg-purple-600 text-white' : 'bg-gray-100 text-gray-600'
-                  }`}
-                >
-                  Regular
-                </button>
-                <button
-                  onClick={() => setMode('pro')}
-                  className={`flex-1 py-3 rounded-xl font-semibold transition-all ${
-                    mode === 'pro' ? 'bg-purple-600 text-white' : 'bg-gray-100 text-gray-600'
-                  }`}
-                >
-                  Pro 🎯
-                </button>
-              </div>
-
-              {mode === 'regular' ? (
-                <div className="space-y-4">
-                  <div>
-                    <label className="text-sm font-semibold text-gray-700 block mb-2">Duration (minutes)</label>
-                    <input
-                      type="number"
-                      value={duration}
-                      onChange={e => setDuration(e.target.value)}
-                      placeholder="30"
-                      className="w-full p-4 border-2 border-gray-200 rounded-xl text-lg font-bold focus:border-purple-400 outline-none dark-mode-input"
-                    />
-                  </div>
-                  <div>
-                    <label className="text-sm font-semibold text-gray-700 block mb-2">Activity</label>
-                    <div className="grid grid-cols-2 gap-2">
-                      {cardio.regularActivities.map(act => (
-                        <button
-                          key={act.id}
-                          onClick={() => setActivity(act.id)}
-                          className={`p-3 rounded-xl border-2 text-left transition-all ${
-                            activity === act.id ? 'border-purple-400 bg-purple-50' : 'border-gray-200 bg-white'
-                          }`}
-                        >
-                          <span className="text-xl mr-2">{act.emoji}</span>
-                          <span className="font-medium text-sm">{act.label}</span>
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                </div>
-              ) : (
-                <div className="space-y-4">
-                  <div>
-                    <label className="text-sm font-semibold text-gray-700 block mb-2">Distance</label>
-                    <div className="flex gap-2">
-                      <input
-                        type="number"
-                        value={distance}
-                        onChange={e => setDistance(e.target.value)}
-                        placeholder={type === 'swimming' ? '1000' : '3.1'}
-                        step={type === 'swimming' ? '25' : '0.1'}
-                        className="flex-1 p-4 border-2 border-gray-200 rounded-xl text-lg font-bold focus:border-purple-400 outline-none dark-mode-input"
-                      />
-                      <select
-                        value={distanceUnit}
-                        onChange={e => setDistanceUnit(e.target.value)}
-                        className="p-4 border-2 border-gray-200 rounded-xl font-semibold bg-white dark-mode-input"
-                      >
-                        {type === 'swimming' ? (
-                          <><option value="yards">yards</option><option value="meters">meters</option></>
-                        ) : (
-                          <><option value="miles">miles</option><option value="km">km</option></>
-                        )}
-                      </select>
-                    </div>
-                  </div>
-                  <div>
-                    <label className="text-sm font-semibold text-gray-700 block mb-2">Time</label>
-                    <div className="flex gap-2">
-                      <div className="flex-1">
-                        <input type="number" value={hours} onChange={e => setHours(e.target.value)} placeholder="0" className="w-full p-3 border-2 border-gray-200 rounded-xl text-center font-bold focus:border-purple-400 outline-none dark-mode-input" />
-                        <div className="text-xs text-gray-500 text-center mt-1">hrs</div>
-                      </div>
-                      <div className="flex-1">
-                        <input type="number" value={minutes} onChange={e => setMinutes(e.target.value)} placeholder="30" className="w-full p-3 border-2 border-gray-200 rounded-xl text-center font-bold focus:border-purple-400 outline-none dark-mode-input" />
-                        <div className="text-xs text-gray-500 text-center mt-1">min</div>
-                      </div>
-                      <div className="flex-1">
-                        <input type="number" value={seconds} onChange={e => setSeconds(e.target.value)} placeholder="00" className="w-full p-3 border-2 border-gray-200 rounded-xl text-center font-bold focus:border-purple-400 outline-none dark-mode-input" />
-                        <div className="text-xs text-gray-500 text-center mt-1">sec</div>
-                      </div>
-                    </div>
-                  </div>
-                  {calculatePace() && (
-                    <div className="bg-purple-50 border border-purple-200 rounded-xl p-4 text-center">
-                      <div className="text-xs text-gray-500 font-semibold uppercase">Pace</div>
-                      <div className="text-2xl font-black text-purple-600">{calculatePace()}</div>
-                    </div>
-                  )}
-                </div>
-              )}
-
-              <div className="mt-4">
-                <label className="text-sm font-semibold text-gray-700 block mb-2">Notes (optional)</label>
-                <textarea value={notes} onChange={e => setNotes(e.target.value)} placeholder="How did it feel?" className="w-full p-3 border-2 border-gray-200 rounded-xl focus:border-purple-400 outline-none resize-none dark-mode-input" rows={2} />
-              </div>
-
-              <button
-                onClick={handleSave}
-                disabled={!canSave}
-                className={`w-full py-4 rounded-xl font-bold text-white mt-6 transition-all ${canSave ? 'bg-purple-600 active:scale-[0.98]' : 'bg-gray-300 cursor-not-allowed'}`}
-              >
-                Save Session
-              </button>
-            </div>
+          <div className="text-[11px] text-gray-500">
+            Generated workouts will open in the Workout tab for quick edits.
           </div>
-        </div>
-      );
-    };
+        </Card>
+      </div>
+    </div>
+  );
+};
 
-    // ========== SUGGESTED WORKOUT SCREEN ==========
-    const SuggestedWorkout = ({ profile, history, suggestedExercises, todayWorkoutType, onEquipmentSelect, onBack }) => {
-      return (
-        <div className="flex flex-col h-full bg-gray-50">
-          <div className="bg-white border-b border-gray-100 sticky top-0 z-20" style={{ paddingTop: 'env(safe-area-inset-top)' }}>
-            <div className="p-4 py-5 flex items-center gap-4">
-              <button onClick={onBack} className="text-gray-600">
-                <Icon name="ChevronLeft" className="w-6 h-6" />
-              </button>
-              <div>
-                <div className="text-xs text-gray-400 font-bold uppercase">Today's Workout</div>
-                <h1 className="text-2xl font-black text-gray-900">{todayWorkoutType} Day</h1>
-              </div>
-            </div>
-          </div>
+const Workout = ({ profile, history, onEquipmentSelect, onOpenCardio, settings, setSettings, todayWorkoutType, pinnedExercises, setPinnedExercises, recentExercises, generatedWorkout, onRegenerateGeneratedWorkout, onSwapGeneratedExercise, onStartGeneratedWorkout, onLogRestDay, restDayLogged, hasWorkoutToday }) => {
+  const [searchQuery, setSearchQuery] = useState('');
+  const [showLibrary, setShowLibrary] = useState(false);
+  const [swapIndex, setSwapIndex] = useState(null);
 
-          <div className="flex-1 overflow-y-auto p-4 pb-24">
-            <div className="mb-4 p-4 bg-purple-50 border border-purple-200 rounded-xl">
-              <div className="flex items-center gap-2 mb-1">
-                <div className="text-xl">🎯</div>
-                <div className="font-semibold text-gray-900">Your Workout Plan</div>
-              </div>
-              <p className="text-sm text-gray-600">
-                {suggestedExercises.length} exercises for {todayWorkoutType.toLowerCase()}.
-              </p>
-            </div>
+  const gymType = GYM_TYPES[profile.gymType];
 
-            <div className="grid grid-cols-2 gap-3">
-              {suggestedExercises.map((id, index) => {
-                const eq = EQUIPMENT_DB[id];
-                const sessions = history[id] || [];
-                const lastSession = sessions[sessions.length - 1];
-                let bestWeight = 0;
-                sessions.forEach(s => {
-                  (s.sets || []).forEach(set => {
-                    if (set.weight > bestWeight) bestWeight = set.weight;
-                  });
-                });
-
-                return (
-                  <button
-                    key={id}
-                    onClick={() => onEquipmentSelect(id)}
-                    className="bg-white p-3 rounded-xl border-2 border-gray-100 active:scale-[0.98] transition-all text-center hover:border-purple-200 shadow-sm"
-                  >
-                    <div className="mb-2">
-                      <span className="inline-block text-xs font-bold text-purple-600 bg-purple-50 px-2 py-1 rounded mb-2">
-                        #{index + 1}
-                      </span>
-                      <div className="w-12 h-12 bg-purple-50 rounded-lg flex items-center justify-center text-2xl mx-auto mb-2">
-                        {eq.type === 'machine' ? '⚙️' : eq.type === 'dumbbell' ? '🏋️' : '🏋️‍♂️'}
-                      </div>
-                      <h3 className="font-bold text-gray-900 text-sm leading-tight mb-1">{eq.name}</h3>
-                      <p className="text-xs text-gray-500">{eq.target}</p>
-                    </div>
-                    
-                    {bestWeight > 0 && (
-                      <div className="pt-2 border-t border-gray-100">
-                        <div className="text-xs text-gray-400 font-semibold">BEST</div>
-                        <div className="text-lg font-black text-gray-900">
-                          {bestWeight}<span className="text-xs text-gray-400 font-normal ml-1">lbs</span>
-                        </div>
-                      </div>
-                    )}
-                    
-                    <div className="mt-2 text-purple-600 font-semibold text-sm">
-                      Log →
-                    </div>
-                  </button>
-                );
-              })}
-            </div>
-
-            <div className="mt-6 p-4 bg-gray-100 rounded-2xl">
-              <div className="text-xs font-bold text-gray-400 uppercase mb-2">💡 Pro Tip</div>
-              <p className="text-sm text-gray-600">
-                Focus on form over weight. Each exercise should feel challenging on the last 2-3 reps.
-              </p>
-            </div>
-          </div>
-        </div>
-      );
-    };
-
-    // ========== WORKOUT SCREEN ==========
-    const Workout = ({ profile, setProfile, history, onEquipmentSelect, onOpenCardio, settings, setSettings, todayWorkoutType }) => {
-      const [filter, setFilter] = useState('All');
-      const [showMore, setShowMore] = useState(false);
-      const [showGymPicker, setShowGymPicker] = useState(false);
-      const [searchQuery, setSearchQuery] = useState('');
-      const [viewMode, setViewMode] = useState(settings?.workoutViewMode || 'all');
-
-      const gymType = GYM_TYPES[profile.gymType];
-      
-      const availableEquipment = useMemo(() => {
-        const ids = Object.keys(EQUIPMENT_DB);
-        return ids.filter(id => {
-          const eq = EQUIPMENT_DB[id];
-          if (eq.type === 'machine') return gymType?.machines;
-          if (eq.type === 'dumbbell') return gymType?.dumbbells?.available;
-          if (eq.type === 'barbell') return gymType?.barbells?.available;
+  const availableEquipment = useMemo(() => {
+    const ids = Object.keys(EQUIPMENT_DB);
+    return ids.filter(id => {
+      const eq = EQUIPMENT_DB[id];
+      if (eq.type === 'machine') return gymType?.machines;
+      if (eq.type === 'dumbbell') return gymType?.dumbbells?.available;
+      if (eq.type === 'barbell') return gymType?.barbells?.available;
       return false;
     });
   }, [gymType]);
 
-  const visibleCardio = useMemo(() => {
-    if (!(filter === 'All' || filter === 'Cardio')) return [];
+  const filteredPinned = pinnedExercises.filter(id => availableEquipment.includes(id));
+  const filteredRecents = recentExercises.filter(id => availableEquipment.includes(id)).slice(0, 12);
 
-    const query = searchQuery.trim().toLowerCase();
+  const searchResults = useMemo(() => {
+    const pool = availableEquipment;
+    if (!searchQuery.trim()) return [];
+    return fuzzyMatchExercises(searchQuery, pool);
+  }, [searchQuery, availableEquipment]);
 
-    const matchesQuery = (cardio) => {
-      if (!query) return true;
-      const haystack = [
-        cardio.name,
-        'cardio',
-        ...(cardio.regularActivities || []).map(a => a.label)
-      ].join(' ').toLowerCase();
-      return haystack.includes(query);
-    };
+  const togglePin = (id) => {
+    const exists = pinnedExercises.includes(id);
+    const updated = exists ? pinnedExercises.filter(x => x !== id) : [...pinnedExercises, id];
+    setPinnedExercises(updated);
+    setSettings(prev => ({ ...(prev || {}), pinnedExercises: updated }));
+  };
 
-    return Object.entries(CARDIO_TYPES)
-      .filter(([, data]) => matchesQuery(data))
-      .map(([key, data]) => ({ key, ...data }));
-  }, [filter, searchQuery]);
-
-  const filteredEquipment = useMemo(() => {
-    const allEquipment = Object.keys(EQUIPMENT_DB);
-    
-    let result = [];
-    
-        if (filter === 'All') result = availableEquipment;
-        else if (filter === 'Machines') result = allEquipment.filter(id => EQUIPMENT_DB[id].type === 'machine');
-        else if (filter === 'Dumbbells') result = allEquipment.filter(id => EQUIPMENT_DB[id].type === 'dumbbell');
-        else if (filter === 'Barbells') result = allEquipment.filter(id => EQUIPMENT_DB[id].type === 'barbell');
-        else if (filter === 'Cardio') result = [];
-        else if (filter === 'Today') {
-          const plan = WORKOUT_PLANS[todayWorkoutType];
-          const todayIds = [];
-          if (gymType?.machines) todayIds.push(...(plan.machines || []));
-          if (gymType?.dumbbells?.available) todayIds.push(...(plan.dumbbells || []));
-          if (gymType?.barbells?.available) todayIds.push(...(plan.barbells || []));
-          result = todayIds;
-        } else {
-          result = availableEquipment.filter(id => EQUIPMENT_DB[id].tags.includes(filter));
-        }
-        
-        // Apply beginner mode filter
-        if (profile.beginnerMode && !profile.beginnerUnlocked) {
-          const pinnedIds = settings?.pinnedExercises || [];
-          result = result.filter(id => pinnedIds.includes(id));
-        }
-        // Apply BIG_BASICS filter if setting is off and filter is 'All'
-        else if (!settings?.showAllExercises && !showMore && filter === 'All') {
-          result = result.filter(id => BIG_BASICS.includes(id));
-        }
-
-        // Apply search filter
-    if (searchQuery.trim()) {
-      const query = searchQuery.toLowerCase();
-      result = result.filter(id => 
-        EQUIPMENT_DB[id].name.toLowerCase().includes(query) ||
-        EQUIPMENT_DB[id].target.toLowerCase().includes(query)
-          );
-        }
-
-        // Apply favorites filter
-        if (viewMode === 'favorites') {
-          const pinnedIds = settings?.pinnedExercises || [];
-        result = result.filter(id => pinnedIds.includes(id));
-      }
-      
-      return result;
-  }, [filter, availableEquipment, todayWorkoutType, gymType, settings?.showAllExercises, showMore, searchQuery, viewMode, settings?.pinnedExercises, profile.beginnerMode, profile.beginnerUnlocked]);
-
-  const filters = ['All', 'Today', 'Cardio', 'Machines', 'Dumbbells', 'Barbells', 'Push', 'Pull', 'Legs'];
-  const totalVisibleExercises = filteredEquipment.length + visibleCardio.length;
-
-  const getLastDate = (id) => {
-    const sessions = history[id] || [];
-    if (sessions.length === 0) return null;
-    return new Date(sessions[sessions.length - 1].date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
-      };
-
-      const togglePin = (id, e) => {
-        e.stopPropagation();
-        const current = settings?.pinnedExercises || [];
-        const updated = current.includes(id) 
-          ? current.filter(x => x !== id)
-          : [...current, id];
-        setSettings(prev => ({ ...prev, pinnedExercises: updated }));
-      };
-
-      const isPinned = (id) => (settings?.pinnedExercises || []).includes(id);
-
-      const getEquipmentIcon = (type) => {
-        if (type === 'machine') return <Icon name="Activity" className="w-6 h-6" />;
-        if (type === 'dumbbell') return <span className="text-xl">🏋️</span>;
-        if (type === 'barbell') return <span className="text-xl">🏋️‍♂️</span>;
-        return null;
-      };
-
-      return (
-        <div className="flex flex-col h-full bg-gray-50">
-          <div className="bg-white border-b border-gray-100 sticky top-0 z-20" style={{ paddingTop: 'env(safe-area-inset-top)' }}>
-            <div className="px-4">
-              <div className="flex justify-between items-center py-4">
-                <div>
-                  <h1 className="text-2xl font-black text-gray-900">Workout</h1>
-                  <div className="text-xs text-gray-400 font-bold">
-                    {filter === 'Today' ? `Today: ${todayWorkoutType} Day` : `${totalVisibleExercises} exercises`}
-                  </div>
-                </div>
-                <button 
-                  onClick={() => setShowGymPicker(true)}
-                  className="text-right active:scale-95 transition-transform"
-                >
-                  <div className="text-xs text-purple-600 font-bold uppercase flex items-center gap-1">
-                    {gymType?.emoji} {gymType?.label}
-                    <Icon name="ChevronDown" className="w-3 h-3" />
-                  </div>
-                  {profile.weight > 0 && (
-                    <div className="text-sm font-bold text-gray-700">{profile.weight} lbs</div>
-                  )}
-                </button>
-              </div>
-
-              <div className="flex gap-2 overflow-x-auto no-scrollbar pb-3">
-                {filters.map(f => (
-                  <button
-                    key={f}
-                    onClick={() => setFilter(f)}
-                    className={`whitespace-nowrap px-4 py-1.5 rounded-full text-xs font-bold transition-all ${
-                      filter === f ? 'bg-purple-600 text-white shadow-md' : 'bg-gray-100 text-gray-500'
-                    }`}
-                  >
-                    {f}
-                  </button>
-                ))}
-              </div>
-
-              {/* Search Bar */}
-              <div className="relative mb-3">
-                <Icon name="Search" className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
-                <input
-                  type="text"
-                  value={searchQuery}
-                  onChange={e => setSearchQuery(e.target.value)}
-                  placeholder="Search exercises..."
-                  className="w-full pl-10 pr-4 py-2.5 bg-gray-100 rounded-xl text-sm font-medium focus:outline-none focus:ring-2 focus:ring-purple-300"
-                />
-              </div>
-
-              {/* View Mode Toggle */}
-              <div className="flex gap-2 pb-3">
-                <button
-                  onClick={() => setViewMode('all')}
-                  className={`flex-1 py-2 rounded-xl text-sm font-bold transition-all ${
-                    viewMode === 'all' ? 'bg-purple-600 text-white' : 'bg-gray-100 text-gray-600'
-                  }`}
-                >
-                  All
-                </button>
-                <button
-                  onClick={() => setViewMode('favorites')}
-                  className={`flex-1 py-2 rounded-xl text-sm font-bold transition-all flex items-center justify-center gap-1 ${
-                    viewMode === 'favorites' ? 'bg-purple-600 text-white' : 'bg-gray-100 text-gray-600'
-                  }`}
-                >
-                  ⭐ Favorites
-                </button>
-              </div>
-            </div>
+  const renderExerciseRow = (id, actionLabel = 'Log') => {
+    const eq = EQUIPMENT_DB[id];
+    if (!eq) return null;
+    return (
+      <button
+        key={id}
+        onClick={() => onEquipmentSelect(id)}
+        className="w-full p-3 rounded-xl border border-gray-200 bg-white flex items-center justify-between active:scale-[0.98] transition"
+      >
+        <div className="flex items-center gap-3 text-left">
+          <div className="w-10 h-10 rounded-lg bg-purple-50 text-purple-700 flex items-center justify-center text-lg">
+            {eq.type === 'machine' ? '⚙️' : eq.type === 'dumbbell' ? '🏋️' : '🏋️‍♂️'}
           </div>
+          <div>
+            <div className="font-bold text-gray-900 text-sm leading-tight">{eq.name}</div>
+            <div className="text-xs text-gray-500">{eq.target}</div>
+          </div>
+        </div>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={(e) => { e.stopPropagation(); togglePin(id); }}
+            className={`px-2 py-1 rounded-full text-xs font-bold ${pinnedExercises.includes(id) ? 'bg-yellow-100 text-yellow-700' : 'bg-gray-100 text-gray-500'}`}
+          >
+            {pinnedExercises.includes(id) ? 'Pinned' : 'Pin'}
+          </button>
+          <div className="text-purple-600 font-semibold text-sm">{actionLabel}</div>
+        </div>
+      </button>
+    );
+  };
 
-          <div className="flex-1 overflow-y-auto pb-24">
-            {/* Beginner Mode Banner */}
-            {profile.beginnerMode && !profile.beginnerUnlocked && (
-              <div className="mx-4 mt-4 p-4 bg-green-50 border border-green-200 rounded-xl">
-                <div className="flex items-center gap-2 mb-1">
-                  <span className="text-lg">🌱</span>
-                  <span className="font-bold text-green-800 text-sm">Beginner Mode Active</span>
-                </div>
-                <p className="text-xs text-green-700">
-                  Complete your first workout to unlock all exercises! For now, focus on your pinned starters.
-                </p>
+  const swapOptions = useMemo(() => {
+    if (swapIndex === null || !generatedWorkout) return [];
+    const currentId = generatedWorkout.exercises[swapIndex];
+    const current = EQUIPMENT_DB[currentId];
+    const pool = availableEquipment.filter(id => id !== currentId && (!current || (EQUIPMENT_DB[id]?.target === current.target || EQUIPMENT_DB[id]?.tags?.some(t => current.tags?.includes(t)))));
+    return pool.slice(0, 20);
+  }, [swapIndex, generatedWorkout, availableEquipment]);
+
+  return (
+    <div className="flex flex-col h-full bg-gray-50">
+      <div className="bg-white border-b border-gray-100 sticky top-0 z-20" style={{ paddingTop: 'env(safe-area-inset-top)' }}>
+        <div className="px-4 py-4 flex items-center justify-between">
+          <div>
+            <h1 className="text-2xl font-black text-gray-900">Workout</h1>
+            <div className="text-xs text-gray-500 font-bold">Search + pins + recents</div>
+          </div>
+          <button
+            onClick={onLogRestDay}
+            disabled={restDayLogged || hasWorkoutToday}
+            className={`px-3 py-2 rounded-xl text-sm font-bold border ${restDayLogged ? 'bg-gray-100 text-gray-400 border-gray-200' : 'bg-white text-purple-700 border-purple-200'}`}
+          >
+            😴 Log Rest Day
+          </button>
+        </div>
+        <div className="px-4 pb-4">
+          <div className="relative">
+            <Icon name="Search" className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+            <input
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              placeholder="Search exercises..."
+              className="w-full pl-10 pr-4 py-3 bg-gray-100 rounded-xl text-sm font-semibold focus:outline-none focus:ring-2 focus:ring-purple-300"
+            />
+          </div>
+          {!showLibrary && (
+            <button
+              onClick={() => setShowLibrary(true)}
+              className="mt-2 text-xs font-bold text-purple-700 underline"
+            >
+              Browse full library
+            </button>
+          )}
+        </div>
+      </div>
+
+      <div className="flex-1 overflow-y-auto pb-28 px-4 space-y-4">
+        {generatedWorkout && (
+          <Card className="space-y-3 border-purple-200 bg-purple-50">
+            <div className="flex items-center justify-between">
+              <div>
+                <div className="text-xs font-bold text-purple-600 uppercase">Generated</div>
+                <div className="text-lg font-black text-gray-900">{generatedWorkout.label}</div>
               </div>
-            )}
-
-            <div className="p-4 grid grid-cols-3 gap-2">
-              {visibleCardio.map(cardio => (
-                <button
-                  key={cardio.key}
-                  onClick={() => onOpenCardio(cardio.key)}
-                  className="cardio-card bg-white p-2 rounded-xl border border-gray-100 active:scale-[0.98] transition-transform cursor-pointer shadow-sm relative text-center"
-                >
-                  <div className="text-center mb-1">
-                    <div className="cardio-accent w-8 h-8 rounded-lg flex items-center justify-center bg-purple-50 text-purple-600 mx-auto mb-1 text-lg">
-                      <span className="text-xl">{cardio.emoji}</span>
-                    </div>
-                    <h3 className="font-bold text-gray-900 text-[10px] leading-tight mb-0.5">{cardio.name}</h3>
-                    <p className="text-[9px] text-gray-400">Cardio</p>
-                  </div>
-
-                  <div className="cardio-track text-center pt-1 border-t border-gray-100">
-                    <div className="text-[9px] font-bold text-gray-400 uppercase">Track</div>
-                    <div className="text-sm font-black text-purple-600">Time + Distance</div>
-                  </div>
-                </button>
-              ))}
-              {filteredEquipment.map(id => {
+              <button onClick={onRegenerateGeneratedWorkout} className="text-sm font-bold text-purple-700">Regenerate</button>
+            </div>
+            <div className="space-y-2">
+              {generatedWorkout.exercises.map((id, idx) => {
                 const eq = EQUIPMENT_DB[id];
-                const sessions = history[id] || [];
-                const best = getBestForEquipment(sessions);
-                const nextTarget = getNextTarget(profile, id, best);
-                const advice = best && settings?.showSuggestions ? getProgressionAdvice(sessions, best) : null;
-
                 return (
-                  <div key={id} onClick={() => onEquipmentSelect(id)} className="bg-white p-2 rounded-xl border border-gray-100 active:scale-[0.98] transition-transform cursor-pointer shadow-sm relative">
-                    {/* Pin Button */}
-                    <button
-                      onClick={(e) => togglePin(id, e)}
-                      className={`absolute top-1 right-1 p-1 rounded-full transition-all z-10 ${
-                        isPinned(id) ? 'text-yellow-500' : 'text-gray-300 hover:text-gray-400'
-                      }`}
-                    >
-                      <span className="text-sm">{isPinned(id) ? '⭐' : '☆'}</span>
-                    </button>
-
-                    <div className="text-center mb-1">
-                      <div className="w-8 h-8 rounded-lg flex items-center justify-center bg-purple-50 text-purple-600 mx-auto mb-1 text-lg">
-                        {getEquipmentIcon(eq.type)}
-                      </div>
-                      <h3 className="font-bold text-gray-900 text-[10px] leading-tight mb-0.5">{eq.name}</h3>
-                      <p className="text-[9px] text-gray-400">{eq.target}</p>
+                  <div key={`${id}-${idx}`} className="p-3 rounded-xl border border-gray-200 bg-white flex items-center justify-between">
+                    <div>
+                      <div className="font-bold text-gray-900 text-sm">{eq?.name || 'Exercise'}</div>
+                      <div className="text-xs text-gray-500">{eq?.target}</div>
                     </div>
-
-                    <div className="text-center pt-1 border-t border-gray-100">
-                      {best ? (
-                        <>
-                          <div className="text-[9px] font-bold text-gray-400 uppercase">Best</div>
-                          <div className="text-sm font-black text-gray-900">
-                            {best}<span className="text-[9px] font-medium text-gray-400 ml-0.5">lbs</span>
-                          </div>
-                          <div className="text-[9px] text-purple-600 font-bold">Next: {nextTarget}</div>
-                        </>
-                      ) : (
-                        <>
-                          <div className="text-[9px] font-bold text-gray-400 uppercase">Start</div>
-                          <div className="text-sm font-black text-purple-600">
-                            {nextTarget}<span className="text-[9px] font-medium text-gray-400 ml-0.5">lbs</span>
-                          </div>
-                        </>
-                      )}
+                    <div className="flex items-center gap-2">
+                      <button onClick={() => togglePin(id)} className={`px-2 py-1 rounded-full text-xs font-bold ${pinnedExercises.includes(id) ? 'bg-yellow-100 text-yellow-700' : 'bg-gray-100 text-gray-500'}`}>
+                        {pinnedExercises.includes(id) ? 'Pinned' : 'Pin'}
+                      </button>
+                      <button onClick={() => setSwapIndex(idx)} className="px-3 py-1 rounded-full border border-purple-200 text-purple-700 text-xs font-bold">Swap</button>
                     </div>
-
-                    {advice && (
-                      <div className={`mt-1 p-1 rounded text-center ${
-                        advice.type === 'ready' ? 'bg-green-50 border border-green-200' : 'bg-blue-50 border border-blue-200'
-                      }`}>
-                        <span className={`text-[8px] font-semibold ${advice.type === 'ready' ? 'text-green-700' : 'text-blue-700'}`}>
-                          {advice.message}
-                        </span>
-                      </div>
-                    )}
                   </div>
                 );
               })}
+            </div>
+            <button
+              onClick={onStartGeneratedWorkout}
+              className="w-full py-3 rounded-xl bg-purple-600 text-white font-bold active:scale-[0.98]"
+            >
+              Start This Workout
+            </button>
+          </Card>
+        )}
 
-              {totalVisibleExercises === 0 && (
-                <div className="col-span-3 text-center py-12 px-4">
-                  <div className="text-4xl mb-3">{viewMode === 'favorites' ? '⭐' : searchQuery ? '🔍' : '🤔'}</div>
-                  {viewMode === 'favorites' ? (
-                    <>
-                      <p className="text-gray-900 font-bold mb-2">No Favorites Yet</p>
-                      <p className="text-sm text-gray-500">Tap the star on any exercise to pin it here.</p>
-                    </>
-                  ) : searchQuery ? (
-                    <>
-                      <p className="text-gray-900 font-bold mb-2">No Results</p>
-                      <p className="text-sm text-gray-500">Try a different search term.</p>
-                    </>
-                  ) : !gymType ? (
-                    <>
-                      <p className="text-gray-900 font-bold mb-2">No Gym Selected</p>
-                      <p className="text-sm text-gray-500 mb-4">Select your gym type to see available exercises</p>
-                      <button
-                        onClick={() => setShowGymPicker(true)}
-                        className="px-6 py-3 bg-purple-600 text-white font-bold rounded-xl active:scale-95 transition-all"
-                      >
-                        Select Gym Type
-                      </button>
-                    </>
-                  ) : filter === 'Barbells' && !gymType?.barbells?.available ? (
-                    <>
-                      <p className="text-gray-900 font-bold mb-2">No Barbells Available</p>
-                      <p className="text-sm text-gray-500">Your gym doesn't have barbells. Try Machines or Dumbbells.</p>
-                    </>
-                  ) : filter === 'Machines' && !gymType?.machines ? (
-                    <>
-                      <p className="text-gray-900 font-bold mb-2">No Machines Available</p>
-                      <p className="text-sm text-gray-500">Your gym doesn't have machines. Try Barbells or Dumbbells.</p>
-                    </>
-                  ) : (
-                    <p className="text-gray-500">No exercises match this filter</p>
-                  )}
-                </div>
+        {filteredPinned.length > 0 && (
+          <Card className="space-y-2">
+            <div className="flex items-center justify-between">
+              <div className="text-xs font-bold text-gray-500 uppercase">Pinned Exercises</div>
+              <div className="text-xs text-gray-400">Tap to log</div>
+            </div>
+            <div className="space-y-2">
+              {filteredPinned.map(id => renderExerciseRow(id, 'Log'))}
+            </div>
+          </Card>
+        )}
+
+        {filteredRecents.length > 0 && (
+          <Card className="space-y-2">
+            <div className="flex items-center justify-between">
+              <div className="text-xs font-bold text-gray-500 uppercase">Recent</div>
+              <div className="text-xs text-gray-400">Last used</div>
+            </div>
+            <div className="space-y-2">
+              {filteredRecents.map(id => renderExerciseRow(id, 'Resume'))}
+            </div>
+          </Card>
+        )}
+
+        {searchQuery && searchResults.length > 0 && (
+          <Card className="space-y-2">
+            <div className="text-xs font-bold text-gray-500 uppercase">Search Results</div>
+            <div className="space-y-2">
+              {searchResults.map(id => renderExerciseRow(id, 'Log'))}
+            </div>
+          </Card>
+        )}
+
+        {showLibrary && (
+          <Card className="space-y-2">
+            <div className="flex items-center justify-between">
+              <div className="text-xs font-bold text-gray-500 uppercase">Full Library</div>
+              <button onClick={() => setShowLibrary(false)} className="text-xs text-purple-700 font-bold">Hide</button>
+            </div>
+            <div className="space-y-2">
+              {availableEquipment.map(id => renderExerciseRow(id, 'Log'))}
+            </div>
+          </Card>
+        )}
+
+        {Object.keys(CARDIO_TYPES).length > 0 && (
+          <Card className="space-y-2">
+            <div className="text-xs font-bold text-gray-500 uppercase">Cardio</div>
+            <div className="grid grid-cols-2 gap-2">
+              {Object.entries(CARDIO_TYPES).map(([key, data]) => (
+                <button
+                  key={key}
+                  onClick={() => onOpenCardio(key)}
+                  className="p-3 rounded-xl border border-gray-200 bg-white text-left active:scale-[0.98] transition"
+                >
+                  <div className="text-lg">{data.emoji}</div>
+                  <div className="font-bold text-gray-900 text-sm">{data.name}</div>
+                  <div className="text-[11px] text-gray-500">Track time + distance</div>
+                </button>
+              ))}
+            </div>
+          </Card>
+        )}
+      </div>
+
+      {swapIndex !== null && (
+        <div className="fixed inset-0 bg-black/60 z-[120] flex items-end justify-center" onClick={() => setSwapIndex(null)}>
+          <div className="bg-white w-full max-w-md rounded-t-3xl p-4 animate-slide-up" onClick={(e) => e.stopPropagation()} style={{ maxHeight: '80vh' }}>
+            <div className="flex items-center justify-between mb-3">
+              <h3 className="text-lg font-bold text-gray-900">Swap Exercise</h3>
+              <button onClick={() => setSwapIndex(null)} className="p-2 rounded-full bg-gray-100 text-gray-600">
+                <Icon name="X" className="w-4 h-4" />
+              </button>
+            </div>
+            <div className="space-y-2 max-h-[60vh] overflow-y-auto">
+              {swapOptions.map(id => (
+                <button
+                  key={id}
+                  onClick={() => { onSwapGeneratedExercise(swapIndex, id); setSwapIndex(null); }}
+                  className="w-full p-3 rounded-xl border border-gray-200 text-left bg-gray-50 active:scale-[0.98]"
+                >
+                  <div className="font-bold text-gray-900 text-sm">{EQUIPMENT_DB[id]?.name}</div>
+                  <div className="text-xs text-gray-500">{EQUIPMENT_DB[id]?.target}</div>
+                </button>
+              ))}
+              {swapOptions.length === 0 && (
+                <div className="text-sm text-gray-500">No similar exercises available.</div>
               )}
             </div>
-            
-            {!settings.showAllExercises && !showMore && filter === 'All' && availableEquipment.length > BIG_BASICS.filter(id => availableEquipment.includes(id)).length && (
-              <div className="px-4 pb-4">
-                <button
-                  onClick={() => setShowMore(true)}
-                  className="w-full py-3 bg-white border-2 border-purple-200 text-purple-600 font-bold rounded-xl active:scale-95 transition-all hover:bg-purple-50"
-                >
-                  Show More Exercises ({availableEquipment.length - BIG_BASICS.filter(id => availableEquipment.includes(id)).length} more)
-                </button>
-              </div>
-            )}
           </div>
-          
-          {showGymPicker && (
-            <div className="fixed inset-0 bg-black/60 flex items-end justify-center z-[100]" onClick={() => setShowGymPicker(false)}>
-              <div className="bg-white rounded-t-3xl w-full max-w-lg p-6 pb-8 animate-slide-up" onClick={(e) => e.stopPropagation()}>
-                <div className="flex items-center justify-between mb-4">
-                  <h2 className="text-xl font-bold text-gray-900">Switch Gym</h2>
-                  <button onClick={() => setShowGymPicker(false)} className="p-2 hover:bg-gray-100 rounded-full">
-                    <Icon name="X" className="w-5 h-5 text-gray-600" />
-                  </button>
-                </div>
-                
-                <div className="space-y-2">
-                  {Object.entries(GYM_TYPES).map(([key, gym]) => (
-                    <button
-                      key={key}
-                      onClick={() => {
-                        setProfile({...profile, gymType: key});
-                        setShowGymPicker(false);
-                      }}
-                      className={`w-full p-4 rounded-xl border-2 text-left transition-all flex items-center gap-3 ${
-                        profile.gymType === key ? 'border-purple-400 bg-purple-50' : 'border-gray-200 bg-white hover:border-gray-300'
-                      }`}
-                    >
-                      <div className="text-3xl flex-shrink-0">{gym.emoji}</div>
-                      <div className="flex-1 min-w-0">
-                        <div className={`font-bold text-base ${profile.gymType === key ? 'text-purple-700' : 'text-gray-900'}`}>
-                          {gym.label}
-                        </div>
-                        {gym.desc && <div className="text-xs text-gray-500 mt-0.5">{gym.desc}</div>}
-                      </div>
-                      {profile.gymType === key && (
-                        <Icon name="Check" className="w-5 h-5 text-purple-600" />
-                      )}
-                    </button>
-                  ))}
-                </div>
-              </div>
-            </div>
-          )}
         </div>
-      );
-    };
-
-    // ========== PLATE CALCULATOR ==========
-    const PlateCalculator = ({ targetWeight, barWeight, onClose }) => {
+      )}
+    </div>
+  );
+};
+const PlateCalculator = ({ targetWeight, barWeight, onClose }) => {
       const [displayWeight, setDisplayWeight] = useState(targetWeight || barWeight || '');
       
       const plates = [45, 35, 25, 10, 5, 2.5];
@@ -3464,7 +2826,7 @@ const motivationalQuotes = [
     };
 
     // ========== PROFILE TAB ==========
-    const ProfileView = ({ profile, setProfile, settings, setSettings, onReset, onExportData, onImportData }) => {
+    const ProfileView = ({ profile, setProfile, settings, setSettings, onReset, onExportData, onImportData, streakObj, workoutCount = 0, restDayCount = 0, onViewAnalytics }) => {
       const [showLearn, setShowLearn] = useState(false);
       const [expandedTopic, setExpandedTopic] = useState(null);
       const [showAvatarPicker, setShowAvatarPicker] = useState(false);
@@ -3549,9 +2911,30 @@ const motivationalQuotes = [
           </div>
 
           <div className="flex-1 overflow-y-auto p-4 pb-24">
+            <Card className="mb-4 bg-gradient-to-br from-purple-50 to-indigo-50 border-purple-200">
+              <div className="flex items-center justify-between">
+                <div>
+                  <div className="text-xs font-bold text-gray-500 uppercase">Streak</div>
+                  <div className="text-2xl font-black text-purple-700">{streakObj?.current || 0} days</div>
+                  <div className="text-[11px] text-gray-500">Best: {streakObj?.best || 0}</div>
+                </div>
+                <div className="text-right">
+                  <div className="text-xs font-bold text-gray-500 uppercase">Workouts</div>
+                  <div className="text-2xl font-black text-gray-900">{workoutCount}</div>
+                  <div className="text-[11px] text-gray-500">Rest days: {restDayCount}</div>
+                </div>
+              </div>
+              <button
+                onClick={onViewAnalytics}
+                className="w-full mt-4 py-3 rounded-xl bg-purple-600 text-white font-bold active:scale-[0.98] transition"
+              >
+                View Analytics
+              </button>
+            </Card>
+
             <Card className="mb-6 text-center">
               <button 
-                onClick={() => setShowAvatarPicker(!showAvatarPicker)}
+                onClick={() => setShowAvatarPicker(!showAvatarPicker)} 
                 className="text-6xl mb-2 mx-auto active:scale-95 transition-transform"
               >
                 {profile.avatar}
@@ -4020,7 +3403,7 @@ const motivationalQuotes = [
       const [activeEquipment, setActiveEquipment] = useState(null);
       const [activeCardio, setActiveCardio] = useState(null);
       const [view, setView] = useState('intro');
-      const [showSuggestedWorkout, setShowSuggestedWorkout] = useState(false);
+      const [showAnalytics, setShowAnalytics] = useState(false);
 
       const [appState, setAppState] = useState({
         lastWorkoutType: null,
@@ -4028,22 +3411,30 @@ const motivationalQuotes = [
         restDays: []
       });
 
+      const [pinnedExercises, setPinnedExercises] = useState([]);
+      const [recentExercises, setRecentExercises] = useState([]);
+      const [exerciseUsageCounts, setExerciseUsageCounts] = useState({});
+      const [dayEntries, setDayEntries] = useState({});
+      const [lastExerciseStats, setLastExerciseStats] = useState({});
+      const [generatedWorkout, setGeneratedWorkout] = useState(null);
+      const [quoteIndex, setQuoteIndex] = useState(() => Math.floor(Math.random() * motivationalQuotes.length));
+
       useEffect(() => {
         const savedV2 = storage.get('ps_v2_profile', null);
+        const savedSettings = storage.get('ps_v2_settings', { showSuggestions: true, showAllExercises: false, pinnedExercises: [], workoutViewMode: 'all', suggestedWorkoutCollapsed: true });
+        const savedHistory = storage.get('ps_v2_history', {});
+        const savedCardio = storage.get('ps_v2_cardio', {});
+        const savedState = storage.get('ps_v2_state', { lastWorkoutType: null, lastWorkoutDayKey: null, restDays: [] });
         
         if (savedV2) {
-          // Ensure gymType has a value (migration for old profiles)
-          // Clear old default activityLevel and goal values (these should be user-selected, not defaults)
           const migratedProfile = {
             ...savedV2,
             gymType: savedV2.gymType || 'commercial',
             barWeight: savedV2.barWeight || 45,
-            // Clear old defaults - users should explicitly choose these
             activityLevel: savedV2.activityLevel === 'Moderately Active' ? null : savedV2.activityLevel,
             goal: savedV2.goal === 'recomp' ? null : savedV2.goal
           };
           setProfile(migratedProfile);
-          // Save migrated profile back to storage
           if (!savedV2.gymType || !savedV2.barWeight || savedV2.activityLevel === 'Moderately Active' || savedV2.goal === 'recomp') {
             storage.set('ps_v2_profile', migratedProfile);
           }
@@ -4055,7 +3446,6 @@ const motivationalQuotes = [
               ...savedV1,
               gymType: savedV1.gymType || 'commercial',
               barWeight: savedV1.barWeight || 45,
-              // Clear old defaults
               activityLevel: savedV1.activityLevel === 'Moderately Active' ? null : savedV1.activityLevel,
               goal: savedV1.goal === 'recomp' ? null : savedV1.goal
             };
@@ -4065,10 +3455,39 @@ const motivationalQuotes = [
           }
         }
         
-        setSettings(storage.get('ps_v2_settings', { showSuggestions: true, showAllExercises: false, pinnedExercises: [], workoutViewMode: 'all', suggestedWorkoutCollapsed: true }));
-        setHistory(storage.get('ps_v2_history', {}));
-        setCardioHistory(storage.get('ps_v2_cardio', {}));
-        setAppState(storage.get('ps_v2_state', { lastWorkoutType: null, lastWorkoutDayKey: null, restDays: [] }));
+        setSettings(savedSettings);
+        setHistory(savedHistory);
+        setCardioHistory(savedCardio);
+        setAppState(savedState);
+
+        const savedMeta = storage.get(STORAGE_KEY, null);
+        const baseMeta = {
+          version: STORAGE_VERSION,
+          pinnedExercises: savedSettings?.pinnedExercises || [],
+          recentExercises: [],
+          exerciseUsageCounts: {},
+          dayEntries: {},
+          lastExerciseStats: {}
+        };
+
+        let metaToUse = baseMeta;
+        if (savedMeta?.version === STORAGE_VERSION) {
+          metaToUse = { ...baseMeta, ...savedMeta };
+        } else {
+          metaToUse = {
+            ...baseMeta,
+            recentExercises: deriveRecentExercises(savedHistory, 12),
+            exerciseUsageCounts: deriveUsageCountsFromHistory(savedHistory),
+            dayEntries: buildDayEntriesFromHistory(savedHistory, savedCardio, savedState?.restDays || [])
+          };
+          storage.set(STORAGE_KEY, metaToUse);
+        }
+
+        setPinnedExercises(metaToUse.pinnedExercises || []);
+        setRecentExercises(metaToUse.recentExercises || []);
+        setExerciseUsageCounts(metaToUse.exerciseUsageCounts || {});
+        setDayEntries(metaToUse.dayEntries || {});
+        setLastExerciseStats(metaToUse.lastExerciseStats || {});
         setLoaded(true);
       }, []);
 
@@ -4077,6 +3496,35 @@ const motivationalQuotes = [
       useEffect(() => { if(loaded) storage.set('ps_v2_history', history); }, [history, loaded]);
       useEffect(() => { if(loaded) storage.set('ps_v2_cardio', cardioHistory); }, [cardioHistory, loaded]);
       useEffect(() => { if(loaded) storage.set('ps_v2_state', appState); }, [appState, loaded]);
+      useEffect(() => {
+        if (!loaded) return;
+        storage.set(STORAGE_KEY, {
+          version: STORAGE_VERSION,
+          pinnedExercises,
+          recentExercises,
+          exerciseUsageCounts,
+          dayEntries,
+          lastExerciseStats
+        });
+      }, [loaded, pinnedExercises, recentExercises, exerciseUsageCounts, dayEntries, lastExerciseStats]);
+
+      useEffect(() => {
+        if (!loaded) return;
+        const pinnedInSettings = settings?.pinnedExercises || [];
+        const different = pinnedInSettings.length !== pinnedExercises.length || pinnedInSettings.some(id => !pinnedExercises.includes(id));
+        if (different) {
+          setSettings(prev => ({ ...(prev || {}), pinnedExercises }));
+        }
+      }, [pinnedExercises, loaded]); 
+
+      useEffect(() => {
+        if (!loaded) return;
+        const pinnedInSettings = settings?.pinnedExercises || [];
+        const different = pinnedInSettings.length !== pinnedExercises.length || pinnedExercises.some(id => !pinnedInSettings.includes(id));
+        if (different) {
+          setPinnedExercises(pinnedInSettings);
+        }
+      }, [settings?.pinnedExercises, loaded]);
       
       useEffect(() => {
         if (settings.darkMode) {
@@ -4093,29 +3541,111 @@ const motivationalQuotes = [
         return computeStrengthScore(profile, history);
       }, [profile, history]);
 
-      const streakObj = useMemo(() => computeStreak(history, cardioHistory, appState?.restDays || []), [history, cardioHistory, appState?.restDays]);
+      const streakObj = useMemo(() => computeStreak(history, cardioHistory, appState?.restDays || [], dayEntries), [history, cardioHistory, appState?.restDays, dayEntries]);
 
       const achievements = useMemo(() => computeAchievements({ history, cardioHistory, strengthScoreObj, streakObj }), [history, cardioHistory, strengthScoreObj, streakObj]);
 
-      const suggestedExercises = useMemo(() => {
-        const gymType = GYM_TYPES[profile.gymType];
-        if (!gymType) return [];
-        
-        const availableTypes = [];
-        if (gymType.machines) availableTypes.push('machines');
-        if (gymType.dumbbells?.available) availableTypes.push('dumbbells');
-        if (gymType.barbells?.available) availableTypes.push('barbells');
-
-        const plan = WORKOUT_PLANS[todayWorkoutType];
-        const suggested = [];
-        
-        availableTypes.forEach(type => {
-          const exercises = plan[type] || [];
-          suggested.push(...exercises);
+      const recordDayEntry = (dayKey, type = 'workout', extras = {}) => {
+        setDayEntries(prev => {
+          const existing = prev[dayKey];
+          const resolvedType = existing?.type === 'workout' ? 'workout' : type;
+          return { ...prev, [dayKey]: { ...(existing || {}), ...extras, type: resolvedType, date: dayKey } };
         });
-        
-        return suggested.slice(0, 4);
-      }, [profile.gymType, todayWorkoutType]);
+      };
+
+      const recordExerciseUse = (exerciseId, sets = []) => {
+        if (!exerciseId) return;
+        setRecentExercises(prev => {
+          const filtered = prev.filter(id => id !== exerciseId);
+          return [exerciseId, ...filtered].slice(0, 12);
+        });
+        setExerciseUsageCounts(prev => ({ ...prev, [exerciseId]: (prev[exerciseId] || 0) + Math.max(1, sets.length || 1) }));
+        if (sets && sets.length > 0) {
+          const lastSet = sets[sets.length - 1];
+          setLastExerciseStats(prev => ({ ...prev, [exerciseId]: { weight: lastSet.weight, reps: lastSet.reps } }));
+        }
+      };
+
+      const todayKey = toDayKey(new Date());
+      const hasWorkoutToday = dayEntries?.[todayKey]?.type === 'workout';
+      const restDayLogged = dayEntries?.[todayKey]?.type === 'rest';
+
+      const ensureWorkoutDayEntry = (exercises = []) => {
+        if (!profile.onboarded) return;
+        recordDayEntry(todayKey, 'workout', { exercises: Array.from(new Set([...(dayEntries[todayKey]?.exercises || []), ...exercises])) });
+      };
+
+      const buildGeneratedWorkout = (type) => {
+        const gymType = GYM_TYPES[profile.gymType];
+        const planKey = type === 'legs' ? 'Legs' : type === 'push' ? 'Push' : type === 'pull' ? 'Pull' : type === 'full' ? 'Full Body' : todayWorkoutType;
+        const plan = WORKOUT_PLANS[planKey] || {};
+        const pool = [];
+        if (gymType?.machines) pool.push(...(plan.machines || []));
+        if (gymType?.dumbbells?.available) pool.push(...(plan.dumbbells || []));
+        if (gymType?.barbells?.available) pool.push(...(plan.barbells || []));
+        const uniquePool = Array.from(new Set(pool));
+        if (uniquePool.length === 0) {
+          uniquePool.push(...Object.keys(EQUIPMENT_DB).slice(0, 12));
+        }
+        while (uniquePool.length < 4) {
+          const fallback = Object.keys(EQUIPMENT_DB).filter(id => (EQUIPMENT_DB[id]?.tags || []).includes(planKey.toLowerCase()) || EQUIPMENT_DB[id]?.tags?.includes(planKey));
+          if (fallback.length === 0) {
+            uniquePool.push(...Object.keys(EQUIPMENT_DB).filter(id => uniquePool.indexOf(id) === -1).slice(0, 4 - uniquePool.length));
+          } else {
+            uniquePool.push(...fallback);
+          }
+          uniquePool.splice(4);
+          if (uniquePool.length >= 4 || fallback.length === 0) break;
+        }
+        const picks = [];
+        const poolCopy = [...uniquePool];
+        for (let i = 0; i < 4 && poolCopy.length > 0; i++) {
+          const idx = Math.floor(Math.random() * poolCopy.length);
+          picks.push(poolCopy.splice(idx, 1)[0]);
+        }
+        return { type, label: planKey === 'Full Body' ? 'Full Body' : `${planKey} Day`, exercises: picks };
+      };
+
+      const triggerGenerator = (type) => {
+        const generated = buildGeneratedWorkout(type === 'surprise' ? ['legs','push','pull','full'][Math.floor(Math.random()*4)] : type);
+        setGeneratedWorkout(generated);
+        setTab('workout');
+      };
+
+      const regenerateGeneratedWorkout = () => {
+        if (!generatedWorkout) return;
+        const regenerated = buildGeneratedWorkout(generatedWorkout.type);
+        setGeneratedWorkout(regenerated);
+      };
+
+      const swapGeneratedExercise = (index, newId) => {
+        setGeneratedWorkout(prev => {
+          if (!prev) return prev;
+          const updated = [...prev.exercises];
+          updated[index] = newId;
+          return { ...prev, exercises: updated };
+        });
+      };
+
+      const startGeneratedWorkout = () => {
+        if (!generatedWorkout) return;
+        ensureWorkoutDayEntry(generatedWorkout.exercises);
+        setActiveEquipment(generatedWorkout.exercises[0]);
+      };
+
+      const handleLogRestDay = () => {
+        if (hasWorkoutToday || restDayLogged) return;
+        recordDayEntry(todayKey, 'rest');
+        setAppState(prev => ({
+          ...(prev || {}),
+          restDays: Array.from(new Set([...(prev?.restDays || []), todayKey]))
+        }));
+      };
+
+      const handleStartWorkout = () => {
+        ensureWorkoutDayEntry();
+        setTab('workout');
+      };
 
       const handleSaveSession = (id, session) => {
         const sessionDay = toDayKey(new Date(session.date));
@@ -4139,6 +3669,9 @@ const motivationalQuotes = [
           setProfile(prev => ({ ...prev, beginnerUnlocked: true }));
         }
 
+        recordExerciseUse(id, session.sets || []);
+        recordDayEntry(sessionDay, 'workout', { exercises: Array.from(new Set([...(dayEntries[sessionDay]?.exercises || []), id])) });
+
         setActiveEquipment(null);
         // Stay on suggested workout screen if user is there
       };
@@ -4154,6 +3687,8 @@ const motivationalQuotes = [
           ...prev,
           [`cardio_${type}`]: [...(prev[`cardio_${type}`] || []), enriched]
         }));
+        const dayKey = toDayKey(session.date ? new Date(session.date) : new Date());
+        recordDayEntry(dayKey, 'workout');
         // Unlock beginner mode after first logged strength OR cardio session
         if (profile.beginnerMode && !profile.beginnerUnlocked) {
           setProfile(prev => ({ ...prev, beginnerUnlocked: true }));
@@ -4187,11 +3722,18 @@ const motivationalQuotes = [
           setTab('home');
           setAppState({ lastWorkoutType: null, lastWorkoutDayKey: null, restDays: [] });
           setSettings({ showSuggestions: true, darkMode: false, showAllExercises: false, pinnedExercises: [], workoutViewMode: 'all', suggestedWorkoutCollapsed: true });
+          setPinnedExercises([]);
+          setRecentExercises([]);
+          setExerciseUsageCounts({});
+          setDayEntries({});
+          setLastExerciseStats({});
+          setGeneratedWorkout(null);
           storage.set('ps_v2_profile', null);
           storage.set('ps_v2_history', {});
           storage.set('ps_v2_cardio', {});
           storage.set('ps_v2_state', { lastWorkoutType: null, lastWorkoutDayKey: null, restDays: [] });
           storage.set('ps_v2_settings', { showSuggestions: true, darkMode: false, showAllExercises: false, pinnedExercises: [], workoutViewMode: 'all', suggestedWorkoutCollapsed: true });
+          storage.set(STORAGE_KEY, { version: STORAGE_VERSION, pinnedExercises: [], recentExercises: [], exerciseUsageCounts: {}, dayEntries: {}, lastExerciseStats: {} });
         }
       };
 
@@ -4215,7 +3757,15 @@ const motivationalQuotes = [
             settings,
             history,
             cardioHistory,
-            appState
+            appState,
+            meta: {
+              version: STORAGE_VERSION,
+              pinnedExercises,
+              recentExercises,
+              exerciseUsageCounts,
+              dayEntries,
+              lastExerciseStats
+            }
           };
 
           const dataStr = JSON.stringify(exportData, null, 2);
@@ -4277,6 +3827,37 @@ const motivationalQuotes = [
                   setAppState(importedData.appState);
                   storage.set('ps_v2_state', importedData.appState);
                 }
+                if (importedData.meta) {
+                  const meta = {
+                    version: STORAGE_VERSION,
+                    pinnedExercises: importedData.meta.pinnedExercises || [],
+                    recentExercises: importedData.meta.recentExercises || [],
+                    exerciseUsageCounts: importedData.meta.exerciseUsageCounts || {},
+                    dayEntries: importedData.meta.dayEntries || {},
+                    lastExerciseStats: importedData.meta.lastExerciseStats || {}
+                  };
+                  setPinnedExercises(meta.pinnedExercises);
+                  setRecentExercises(meta.recentExercises);
+                  setExerciseUsageCounts(meta.exerciseUsageCounts);
+                  setDayEntries(meta.dayEntries);
+                  setLastExerciseStats(meta.lastExerciseStats);
+                  storage.set(STORAGE_KEY, meta);
+                } else {
+                  const derivedMeta = {
+                    version: STORAGE_VERSION,
+                    pinnedExercises: importedData.settings?.pinnedExercises || [],
+                    recentExercises: deriveRecentExercises(importedData.history || {}),
+                    exerciseUsageCounts: deriveUsageCountsFromHistory(importedData.history || {}),
+                    dayEntries: buildDayEntriesFromHistory(importedData.history || {}, importedData.cardioHistory || {}, importedData.appState?.restDays || []),
+                    lastExerciseStats: {}
+                  };
+                  setPinnedExercises(derivedMeta.pinnedExercises);
+                  setRecentExercises(derivedMeta.recentExercises);
+                  setExerciseUsageCounts(derivedMeta.exerciseUsageCounts);
+                  setDayEntries(derivedMeta.dayEntries);
+                  setLastExerciseStats(derivedMeta.lastExerciseStats);
+                  storage.set(STORAGE_KEY, derivedMeta);
+                }
 
                 alert('✅ Data imported successfully! Your backup has been restored.');
               }
@@ -4295,59 +3876,63 @@ const motivationalQuotes = [
       if (view === 'intro') return <IntroScreen onComplete={() => setView('setup')} />;
       if (view === 'setup') return <ProfileSetup profile={profile} setProfile={setProfile} settings={settings} setSettings={setSettings} onComplete={completeOnboarding} />;
 
-      return (
+      
+return (
         <>
           <InstallPrompt />
           <div className="h-screen bg-gray-50 flex flex-col overflow-hidden">
             <div className="flex-1 overflow-hidden">
-              {showSuggestedWorkout ? (
-                <SuggestedWorkout
-                  profile={profile}
-                  history={history}
-                  suggestedExercises={suggestedExercises}
-                  todayWorkoutType={todayWorkoutType}
-                  onEquipmentSelect={setActiveEquipment}
-                  onBack={() => setShowSuggestedWorkout(false)}
-                />
+              {showAnalytics ? (
+                <div className="h-full flex flex-col bg-gray-50">
+                  <div className="bg-white border-b border-gray-200 p-4 flex items-center gap-3">
+                    <button onClick={() => setShowAnalytics(false)} className="p-2 rounded-full bg-gray-100">
+                      <Icon name="ChevronLeft" className="w-5 h-5 text-gray-700" />
+                    </button>
+                    <div>
+                      <div className="text-xs font-bold text-gray-500 uppercase">Analytics</div>
+                      <div className="text-lg font-black text-gray-900">Progress</div>
+                    </div>
+                  </div>
+                  <div className="flex-1 overflow-y-auto">
+                    <Progress
+                      profile={profile}
+                      history={history}
+                      strengthScoreObj={strengthScoreObj}
+                      cardioHistory={cardioHistory}
+                    />
+                  </div>
+                </div>
               ) : (
                 <>
                   {tab === 'home' && (
                     <Home
                       profile={profile}
-                      setProfile={setProfile}
-                      history={history}
-                      cardioHistory={cardioHistory}
-                      appState={appState}
-                      setAppState={setAppState}
-                      onGoWorkout={() => setTab('workout')}
-                      onStartSuggestedWorkout={() => setShowSuggestedWorkout(true)}
-                      onGoProfile={() => setTab('profile')}
-                      onOpenCardio={(type) => setActiveCardio(type)}
                       streakObj={streakObj}
-                      achievements={achievements}
-                      todayWorkoutType={todayWorkoutType}
-                      settings={settings}
-                      setSettings={setSettings}
+                      onStartWorkout={handleStartWorkout}
+                      onGenerate={triggerGenerator}
+                      quoteIndex={quoteIndex}
+                      onRefreshQuote={() => setQuoteIndex((prev) => (prev + 1) % motivationalQuotes.length)}
                     />
                   )}
                   {tab === 'workout' && (
                     <Workout
                       profile={profile}
-                      setProfile={setProfile}
                       history={history}
                       onEquipmentSelect={setActiveEquipment}
                       onOpenCardio={(type) => setActiveCardio(type)}
                       settings={settings}
                       setSettings={setSettings}
                       todayWorkoutType={todayWorkoutType}
-                    />
-                  )}
-                  {tab === 'progress' && (
-                    <Progress
-                      profile={profile}
-                      history={history}
-                      strengthScoreObj={strengthScoreObj}
-                      cardioHistory={cardioHistory}
+                      pinnedExercises={pinnedExercises}
+                      setPinnedExercises={setPinnedExercises}
+                      recentExercises={recentExercises}
+                      generatedWorkout={generatedWorkout}
+                      onRegenerateGeneratedWorkout={regenerateGeneratedWorkout}
+                      onSwapGeneratedExercise={swapGeneratedExercise}
+                      onStartGeneratedWorkout={startGeneratedWorkout}
+                      onLogRestDay={handleLogRestDay}
+                      restDayLogged={restDayLogged}
+                      hasWorkoutToday={hasWorkoutToday}
                     />
                   )}
                   {tab === 'profile' && (
@@ -4359,13 +3944,17 @@ const motivationalQuotes = [
                       onReset={handleReset}
                       onExportData={handleExportData}
                       onImportData={handleImportData}
+                      streakObj={streakObj}
+                      workoutCount={Object.values(history || {}).reduce((sum, sessions) => sum + (sessions?.length || 0), 0)}
+                      restDayCount={Object.values(dayEntries || {}).filter(d => d.type === 'rest').length}
+                      onViewAnalytics={() => setShowAnalytics(true)}
                     />
                   )}
                 </>
               )}
             </div>
 
-            {!showSuggestedWorkout && <TabBar currentTab={tab} setTab={setTab} />}
+            {!showAnalytics && <TabBar currentTab={tab} setTab={setTab} />}
 
             {activeEquipment && (
               <EquipmentDetail
@@ -4387,6 +3976,4 @@ const motivationalQuotes = [
           </div>
         </>
       );
-    };
-
     ReactDOM.render(<App />, document.getElementById('root'));
